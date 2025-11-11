@@ -1,0 +1,1 @@
+- Dependencies should always be installed using `bun` from the *root directory only*, as this is where the project's `bun.lock` file is.

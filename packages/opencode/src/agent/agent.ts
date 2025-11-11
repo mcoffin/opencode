@@ -256,13 +256,18 @@ function mergeAgentPermissions(basePermission: any, overridePermission: any): Ag
     ...(merged.tools ?? {}), // Start with explicit tools map
   }
 
+  // Check if user provided an explicit wildcard (not from defaults)
+  const userProvidedWildcard =
+    toolsMap["*"] !== undefined && Object.keys(toolsMap).length === 1 && overridePermission.tools?.["*"] !== undefined
+
   // Migrate legacy fields into tools map (if not already specified)
   // Only migrate if the tool doesn't already have an explicit entry
-  if (merged.edit && !toolsMap.edit && !toolsMap.write) {
+  // Skip migration if user explicitly set only a wildcard (they want it to apply to everything)
+  if (merged.edit && !toolsMap.edit && !toolsMap.write && !userProvidedWildcard) {
     toolsMap.edit = merged.edit
     toolsMap.write = merged.edit // write inherits from edit
   }
-  if (merged.webfetch && !toolsMap.webfetch) {
+  if (merged.webfetch && !toolsMap.webfetch && !userProvidedWildcard) {
     toolsMap.webfetch = merged.webfetch
   }
   // bash is special - keep it separate due to command-level granularity
