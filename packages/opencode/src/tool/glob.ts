@@ -16,7 +16,20 @@ export const GlobTool = Tool.define("glob", {
         `The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.`,
       ),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
+    // Check tool permission
+    const { Agent } = await import("../agent/agent")
+    const { Permission } = await import("../permission")
+    const agent = await Agent.get(ctx.agent)
+    await Permission.checkTool({
+      toolId: "glob",
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      agentPermission: agent.permission,
+      metadata: params,
+    })
+
     let search = params.path ?? Instance.directory
     search = path.isAbsolute(search) ? search : path.resolve(Instance.directory, search)
 

@@ -362,6 +362,10 @@ export namespace Config {
           webfetch: Permission.optional(),
           doom_loop: Permission.optional(),
           external_directory: Permission.optional(),
+          tools: z
+            .record(z.string(), Permission)
+            .optional()
+            .describe("Tool permissions. Use tool name as key (e.g., 'edit', 'bash', 'grep'). Use '*' for all tools."),
         })
         .optional(),
     })
@@ -578,6 +582,10 @@ export namespace Config {
           webfetch: Permission.optional(),
           doom_loop: Permission.optional(),
           external_directory: Permission.optional(),
+          tools: z
+            .record(z.string(), Permission)
+            .optional()
+            .describe("Tool permissions. Use tool name as key (e.g., 'edit', 'bash', 'grep'). Use '*' for all tools."),
         })
         .optional(),
       tools: z.record(z.string(), z.boolean()).optional(),

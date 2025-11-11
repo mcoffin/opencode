@@ -121,15 +121,26 @@ export namespace ToolRegistry {
   ): Promise<Record<string, boolean>> {
     const result: Record<string, boolean> = {}
 
-    if (agent.permission.edit === "deny") {
-      result["edit"] = false
+    // Get all tool IDs
+    const toolIds = await ids()
+
+    // Check each tool's permission using the generic permission system
+    const { Permission } = await import("../permission")
+    for (const toolId of toolIds) {
+      const permission = Permission.getToolPermission(toolId, agent.permission)
+      if (permission === "deny") {
+        result[toolId] = false
+      }
+    }
+
+    // Special case: if edit is denied, also deny write
+    if (Permission.getToolPermission("edit", agent.permission) === "deny") {
       result["write"] = false
     }
+
+    // Keep legacy bash permission check (has granular command-level permissions)
     if (agent.permission.bash["*"] === "deny" && Object.keys(agent.permission.bash).length === 1) {
       result["bash"] = false
-    }
-    if (agent.permission.webfetch === "deny") {
-      result["webfetch"] = false
     }
 
     return result

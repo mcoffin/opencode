@@ -12,10 +12,23 @@ export const GrepTool = Tool.define("grep", {
     path: z.string().optional().describe("The directory to search in. Defaults to the current working directory."),
     include: z.string().optional().describe('File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")'),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
     if (!params.pattern) {
       throw new Error("pattern is required")
     }
+
+    // Check tool permission
+    const { Agent } = await import("../agent/agent")
+    const { Permission } = await import("../permission")
+    const agent = await Agent.get(ctx.agent)
+    await Permission.checkTool({
+      toolId: "grep",
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      agentPermission: agent.permission,
+      metadata: params,
+    })
 
     const searchPath = params.path || Instance.directory
 

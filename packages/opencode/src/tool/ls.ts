@@ -40,7 +40,20 @@ export const ListTool = Tool.define("list", {
     path: z.string().describe("The absolute path to the directory to list (must be absolute, not relative)").optional(),
     ignore: z.array(z.string()).describe("List of glob patterns to ignore").optional(),
   }),
-  async execute(params) {
+  async execute(params, ctx) {
+    // Check tool permission
+    const { Agent } = await import("../agent/agent")
+    const { Permission } = await import("../permission")
+    const agent = await Agent.get(ctx.agent)
+    await Permission.checkTool({
+      toolId: "list",
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      agentPermission: agent.permission,
+      metadata: params,
+    })
+
     const searchPath = path.resolve(Instance.directory, params.path || ".")
 
     const ignoreGlobs = IGNORE_PATTERNS.map((p) => `!${p}*`).concat(params.ignore?.map((p) => `!${p}`) || [])

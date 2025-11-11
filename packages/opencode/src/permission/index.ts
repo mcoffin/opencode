@@ -190,4 +190,80 @@ export namespace Permission {
       super(`The user rejected permission to use this specific tool call. You may try again with different parameters.`)
     }
   }
+
+  /**
+   * Get the effective permission level for a tool.
+   * Precedence: tools[toolId] > tools["*"] > legacy field > "ask"
+   */
+  export function getToolPermission(
+    toolId: string,
+    agentPermission: {
+      edit?: "ask" | "allow" | "deny"
+      bash?: "ask" | "allow" | "deny" | Record<string, "ask" | "allow" | "deny">
+      webfetch?: "ask" | "allow" | "deny"
+      tools?: Record<string, "ask" | "allow" | "deny">
+    },
+  ): "ask" | "allow" | "deny" {
+    // 1. Check tools map for specific tool
+    if (agentPermission.tools?.[toolId]) {
+      return agentPermission.tools[toolId]
+    }
+
+    // 2. Check tools map for wildcard
+    if (agentPermission.tools?.["*"]) {
+      return agentPermission.tools["*"]
+    }
+
+    // 3. Check legacy fields for backwards compatibility
+    if (toolId === "edit" || toolId === "write") {
+      return agentPermission.edit ?? "ask"
+    }
+    if (toolId === "bash") {
+      const bash = agentPermission.bash
+      if (typeof bash === "string") return bash
+      return bash?.["*"] ?? "ask"
+    }
+    if (toolId === "webfetch") {
+      return agentPermission.webfetch ?? "ask"
+    }
+
+    // 4. Default to ask for safety
+    return "ask"
+  }
+
+  /**
+   * Check if a tool is allowed to execute. Throws if denied, prompts if ask.
+   */
+  export async function checkTool(input: {
+    toolId: string
+    sessionID: string
+    messageID: string
+    callID?: string
+    agentPermission: Parameters<typeof getToolPermission>[1]
+    title?: string
+    metadata?: Record<string, any>
+  }) {
+    const permission = getToolPermission(input.toolId, input.agentPermission)
+
+    if (permission === "deny") {
+      throw new RejectedError(input.sessionID, `${input.toolId}-denied`, input.callID, {
+        tool: input.toolId,
+        ...input.metadata,
+      })
+    }
+
+    if (permission === "ask") {
+      await ask({
+        type: input.toolId,
+        pattern: input.toolId,
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+        callID: input.callID,
+        title: input.title ?? `Use tool: ${input.toolId}`,
+        metadata: { tool: input.toolId, ...input.metadata },
+      })
+    }
+
+    // If "allow", just return
+  }
 }

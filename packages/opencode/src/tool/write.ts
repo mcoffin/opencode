@@ -43,19 +43,19 @@ export const WriteTool = Tool.define("write", {
     const exists = await file.exists()
     if (exists) await FileTime.assert(ctx.sessionID, filepath)
 
-    if (agent.permission.edit === "ask")
-      await Permission.ask({
-        type: "write",
-        sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: exists ? "Overwrite this file: " + filepath : "Create new file: " + filepath,
-        metadata: {
-          filePath: filepath,
-          content: params.content,
-          exists,
-        },
-      })
+    await Permission.checkTool({
+      toolId: "write",
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      agentPermission: agent.permission,
+      title: exists ? "Overwrite this file: " + filepath : "Create new file: " + filepath,
+      metadata: {
+        filePath: filepath,
+        content: params.content,
+        exists,
+      },
+    })
 
     await Bun.write(filepath, params.content)
     await Bus.publish(File.Event.Edited, {

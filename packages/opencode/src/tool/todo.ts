@@ -9,6 +9,19 @@ export const TodoWriteTool = Tool.define("todowrite", {
     todos: z.array(Todo.Info).describe("The updated todo list"),
   }),
   async execute(params, opts) {
+    // Check tool permission
+    const { Agent } = await import("../agent/agent")
+    const { Permission } = await import("../permission")
+    const agent = await Agent.get(opts.agent)
+    await Permission.checkTool({
+      toolId: "todowrite",
+      sessionID: opts.sessionID,
+      messageID: opts.messageID,
+      callID: opts.callID,
+      agentPermission: agent.permission,
+      metadata: params,
+    })
+
     await Todo.update({
       sessionID: opts.sessionID,
       todos: params.todos,
@@ -26,7 +39,20 @@ export const TodoWriteTool = Tool.define("todowrite", {
 export const TodoReadTool = Tool.define("todoread", {
   description: "Use this tool to read your todo list",
   parameters: z.object({}),
-  async execute(_params, opts) {
+  async execute(params, opts) {
+    // Check tool permission
+    const { Agent } = await import("../agent/agent")
+    const { Permission } = await import("../permission")
+    const agent = await Agent.get(opts.agent)
+    await Permission.checkTool({
+      toolId: "todoread",
+      sessionID: opts.sessionID,
+      messageID: opts.messageID,
+      callID: opts.callID,
+      agentPermission: agent.permission,
+      metadata: params,
+    })
+
     const todos = await Todo.get(opts.sessionID)
     return {
       title: `${todos.filter((x) => x.status !== "completed").length} todos`,

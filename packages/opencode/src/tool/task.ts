@@ -25,6 +25,18 @@ export const TaskTool = Tool.define("task", async () => {
       subagent_type: z.string().describe("The type of specialized agent to use for this task"),
     }),
     async execute(params, ctx) {
+      // Check tool permission
+      const { Permission } = await import("../permission")
+      const parentAgent = await Agent.get(ctx.agent)
+      await Permission.checkTool({
+        toolId: "task",
+        sessionID: ctx.sessionID,
+        messageID: ctx.messageID,
+        callID: ctx.callID,
+        agentPermission: parentAgent.permission,
+        metadata: params,
+      })
+
       const agent = await Agent.get(params.subagent_type)
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
       const session = await Session.create({

@@ -24,20 +24,21 @@ export const WebFetchTool = Tool.define("webfetch", {
       throw new Error("URL must start with http:// or https://")
     }
 
-    const cfg = await Config.get()
-    if (cfg.permission?.webfetch === "ask")
-      await Permission.ask({
-        type: "webfetch",
-        sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: "Fetch content from: " + params.url,
-        metadata: {
-          url: params.url,
-          format: params.format,
-          timeout: params.timeout,
-        },
-      })
+    const { Agent } = await import("../agent/agent")
+    const agent = await Agent.get(ctx.agent)
+    await Permission.checkTool({
+      toolId: "webfetch",
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      agentPermission: agent.permission,
+      title: "Fetch content from: " + params.url,
+      metadata: {
+        url: params.url,
+        format: params.format,
+        timeout: params.timeout,
+      },
+    })
 
     const timeout = Math.min((params.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000, MAX_TIMEOUT)
 

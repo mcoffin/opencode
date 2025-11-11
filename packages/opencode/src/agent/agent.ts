@@ -22,6 +22,7 @@ export namespace Agent {
         webfetch: Config.Permission.optional(),
         doom_loop: Config.Permission.optional(),
         external_directory: Config.Permission.optional(),
+        tools: z.record(z.string(), Config.Permission).optional(),
       }),
       model: z
         .object({
@@ -49,6 +50,9 @@ export namespace Agent {
       webfetch: "allow",
       doom_loop: "ask",
       external_directory: "ask",
+      tools: {
+        "*": "ask",
+      },
     }
     const agentPermission = mergeAgentPermissions(defaultPermission, cfg.permission ?? {})
 
@@ -94,6 +98,9 @@ export namespace Agent {
           "*": "ask",
         },
         webfetch: "allow",
+        tools: {
+          "*": "ask",
+        },
       },
       cfg.permission ?? {},
     )
@@ -244,12 +251,29 @@ function mergeAgentPermissions(basePermission: any, overridePermission: any): Ag
     }
   }
 
+  // Build tools map from legacy fields + new tools field
+  const toolsMap: Record<string, Config.Permission> = {
+    ...(merged.tools ?? {}), // Start with explicit tools map
+  }
+
+  // Migrate legacy fields into tools map (if not already specified)
+  // Only migrate if the tool doesn't already have an explicit entry
+  if (merged.edit && !toolsMap.edit && !toolsMap.write) {
+    toolsMap.edit = merged.edit
+    toolsMap.write = merged.edit // write inherits from edit
+  }
+  if (merged.webfetch && !toolsMap.webfetch) {
+    toolsMap.webfetch = merged.webfetch
+  }
+  // bash is special - keep it separate due to command-level granularity
+
   const result: Agent.Info["permission"] = {
     edit: merged.edit ?? "allow",
     webfetch: merged.webfetch ?? "allow",
     bash: mergedBash ?? { "*": "allow" },
     doom_loop: merged.doom_loop,
     external_directory: merged.external_directory,
+    tools: toolsMap,
   }
 
   return result
