@@ -100,6 +100,12 @@ export namespace SessionRevert {
       const [preserveParts, removeParts] = splitWhen(last.parts, (x) => x.id === partID)
       last.parts = preserveParts
       for (const part of removeParts) {
+        log.debug("part removal", {
+          sessionID: sessionID,
+          messageID: last.info.id,
+          partID: part.id,
+          partType: part.type,
+        })
         await Storage.remove(["part", last.info.id, part.id])
         await Bus.publish(MessageV2.Event.PartRemoved, {
           sessionID: sessionID,

@@ -58,6 +58,10 @@ export namespace Bus {
     log.info("publishing", {
       type: def.type,
     })
+    log.debug("publishing event with full payload", {
+      type: def.type,
+      payload: payload,
+    })
     const pending = []
     for (const key of [def.type, "*"]) {
       const match = state().subscriptions.get(key)
@@ -93,6 +97,10 @@ export namespace Bus {
 
   function raw(type: string, callback: (event: any) => void) {
     log.info("subscribing", { type })
+    log.debug("subscribing with callback details", {
+      type: type,
+      callback: callback.toString().substring(0, 100) + "...",
+    })
     const subscriptions = state().subscriptions
     let match = subscriptions.get(type) ?? []
     match.push(callback)
@@ -100,6 +108,7 @@ export namespace Bus {
 
     return () => {
       log.info("unsubscribing", { type })
+      log.debug("unsubscribing callback", { type: type })
       const match = subscriptions.get(type)
       if (!match) return
       const index = match.indexOf(callback)

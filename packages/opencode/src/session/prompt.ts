@@ -304,8 +304,38 @@ export namespace SessionPrompt {
       await using _ = defer(async () => {
         await processor.end()
       })
-      const doStream = () =>
-        streamText({
+      const doStream = () => {
+        log.debug("LLM provider query starting", {
+          providerID: model.providerID,
+          modelID: model.modelID,
+          sessionID: input.sessionID,
+          messageID: userMsg.info.id,
+          messages: [
+            ...system.map(
+              (x): ModelMessage => ({
+                role: "system",
+                content: x,
+              }),
+            ),
+            ...MessageV2.toModelMessage(
+              msgs.filter((m) => {
+                if (m.info.role !== "assistant" || m.info.error === undefined) {
+                  return true
+                }
+                if (
+                  MessageV2.AbortedError.isInstance(m.info.error) &&
+                  m.parts.some((part) => part.type !== "step-start" && part.type !== "reasoning")
+                ) {
+                  return true
+                }
+
+                return false
+              }),
+            ),
+          ],
+          tools: model.info.tool_call === false ? undefined : tools,
+        })
+        return streamText({
           onError(error) {
             log.error("stream error", {
               error,
@@ -394,13 +424,23 @@ export namespace SessionPrompt {
             ],
           }),
         })
+      }
 
       let stream = doStream()
+      log.debug("LLM stream created", {
+        sessionID: input.sessionID,
+        messageID: userMsg.info.id,
+      })
       const cfg = await Config.get()
       const maxRetries = cfg.experimental?.chatMaxRetries ?? MAX_RETRIES
       let result = await processor.process(stream, {
         count: 0,
         max: maxRetries,
+      })
+      log.debug("LLM response processed", {
+        sessionID: input.sessionID,
+        messageID: userMsg.info.id,
+        result: result,
       })
       if (result.shouldRetry) {
         const start = Date.now()
@@ -584,6 +624,12 @@ export namespace SessionPrompt {
         description: item.description,
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
+          log.debug("tool execution starting", {
+            tool: item.id,
+            sessionID: input.sessionID,
+            callID: options.toolCallId,
+            args: args,
+          })
           await Plugin.trigger(
             "tool.execute.before",
             {
@@ -623,6 +669,12 @@ export namespace SessionPrompt {
               }
             },
           })
+          log.debug("tool execution completed", {
+            tool: item.id,
+            sessionID: input.sessionID,
+            callID: options.toolCallId,
+            result: result,
+          })
           await Plugin.trigger(
             "tool.execute.after",
             {
@@ -632,6 +684,11 @@ export namespace SessionPrompt {
             },
             result,
           )
+          log.debug("tool execution after trigger completed", {
+            tool: item.id,
+            sessionID: input.sessionID,
+            callID: options.toolCallId,
+          })
           return result
         },
         toModelOutput(result) {
@@ -648,6 +705,12 @@ export namespace SessionPrompt {
       const execute = item.execute
       if (!execute) continue
       item.execute = async (args, opts) => {
+        log.debug("MCP tool execution starting", {
+          tool: key,
+          sessionID: input.sessionID,
+          callID: opts.toolCallId,
+          args: args,
+        })
         await Plugin.trigger(
           "tool.execute.before",
           {
@@ -660,6 +723,12 @@ export namespace SessionPrompt {
           },
         )
         const result = await execute(args, opts)
+        log.debug("MCP tool execution completed", {
+          tool: key,
+          sessionID: input.sessionID,
+          callID: opts.toolCallId,
+          result: result,
+        })
 
         await Plugin.trigger(
           "tool.execute.after",

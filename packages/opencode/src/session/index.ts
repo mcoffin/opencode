@@ -326,6 +326,12 @@ export namespace Session {
   })
 
   export const updateMessage = fn(MessageV2.Info, async (msg) => {
+    log.debug("message update", {
+      messageID: msg.id,
+      sessionID: msg.sessionID,
+      role: msg.role,
+      message: msg,
+    })
     await Storage.write(["message", msg.sessionID, msg.id], msg)
     Bus.publish(MessageV2.Event.Updated, {
       info: msg,
@@ -339,6 +345,10 @@ export namespace Session {
       messageID: Identifier.schema("message"),
     }),
     async (input) => {
+      log.debug("message removal", {
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+      })
       await Storage.remove(["message", input.sessionID, input.messageID])
       Bus.publish(MessageV2.Event.Removed, {
         sessionID: input.sessionID,
@@ -363,6 +373,14 @@ export namespace Session {
   export const updatePart = fn(UpdatePartInput, async (input) => {
     const part = "delta" in input ? input.part : input
     const delta = "delta" in input ? input.delta : undefined
+    log.debug("part update", {
+      partID: part.id,
+      messageID: part.messageID,
+      sessionID: part.sessionID,
+      partType: part.type,
+      part: part,
+      delta: delta,
+    })
     await Storage.write(["part", part.messageID, part.id], part)
     Bus.publish(MessageV2.Event.PartUpdated, {
       part,

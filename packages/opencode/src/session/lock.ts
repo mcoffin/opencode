@@ -27,11 +27,21 @@ export namespace SessionLock {
       }
     },
     async (current) => {
+      log.debug("force abort cleanup starting", {
+        lockCount: current.locks.size,
+        sessionIDs: Array.from(current.locks.keys()),
+      })
       for (const [sessionID, lock] of current.locks) {
         log.info("force abort", { sessionID })
+        log.debug("force aborting session", {
+          sessionID: sessionID,
+          created: lock.created,
+          elapsed: Date.now() - lock.created,
+        })
         lock.controller.abort()
       }
       current.locks.clear()
+      log.debug("force abort cleanup completed")
     },
   )
 
@@ -50,6 +60,10 @@ export namespace SessionLock {
   export function acquire(input: { sessionID: string }) {
     const lock = get(input.sessionID)
     if (lock) {
+      log.debug("session lock conflict", {
+        sessionID: input.sessionID,
+        existingLockCreated: lock.created,
+      })
       throw new LockedError({
         sessionID: input.sessionID,
         message: `Session ${input.sessionID} is locked`,
@@ -61,9 +75,14 @@ export namespace SessionLock {
       created: Date.now(),
     })
     log.info("locked", { sessionID: input.sessionID })
+    log.debug("session lock acquired", {
+      sessionID: input.sessionID,
+      controller: controller,
+    })
     return {
       signal: controller.signal,
       abort() {
+        log.debug("session lock abort called", { sessionID: input.sessionID })
         controller.abort()
         unset({ sessionID: input.sessionID, controller })
       },
@@ -71,6 +90,7 @@ export namespace SessionLock {
         const removed = unset({ sessionID: input.sessionID, controller })
         if (removed) {
           log.info("unlocked", { sessionID: input.sessionID })
+          log.debug("session lock disposed", { sessionID: input.sessionID })
         }
       },
     }
@@ -80,8 +100,14 @@ export namespace SessionLock {
     const lock = get(sessionID)
     if (!lock) return false
     log.info("abort", { sessionID })
+    log.debug("session abort triggered", {
+      sessionID: sessionID,
+      created: lock.created,
+      elapsed: Date.now() - lock.created,
+    })
     lock.controller.abort()
     state().locks.delete(sessionID)
+    log.debug("session abort completed", { sessionID: sessionID })
     return true
   }
 
