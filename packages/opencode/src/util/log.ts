@@ -55,7 +55,12 @@ export namespace Log {
     return msg.length
   }
 
+  let initialized = false
   export async function init(options: Options) {
+    if (initialized)
+      return
+    else
+      initialized = true
     if (options.level) level = options.level
     cleanup(Global.Path.log)
     if (options.print) return

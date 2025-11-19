@@ -162,8 +162,18 @@ export namespace SessionPrompt {
     await Promise.all(
       files.map(async (match) => {
         const name = match[1]
-        if (seen.has(name)) return
-        seen.add(name)
+        let startLine = match[2] ? parseInt(match[2]) : undefined
+        let endLine = match[3] ? parseInt(match[3]) : undefined
+
+        // Auto-correct L0 to L1
+        if (startLine === 0) startLine = 1
+        if (endLine === 0) endLine = 1
+
+        // Handle reversed ranges by swapping
+        if (startLine !== undefined && endLine !== undefined && endLine < startLine) {
+          ;[startLine, endLine] = [endLine, startLine]
+        }
+
         const filepath = name.startsWith("~/")
           ? path.join(os.homedir(), name.slice(2))
           : path.resolve(Instance.worktree, name)
@@ -181,6 +191,7 @@ export namespace SessionPrompt {
         }
 
         if (stats.isDirectory()) {
+          // Ignore line ranges for directories
           parts.push({
             type: "file",
             url: `file://${filepath}`,
@@ -190,9 +201,18 @@ export namespace SessionPrompt {
           return
         }
 
+        // Build URL with optional line range query parameters
+        let fileUrl = `file://${filepath}`
+        if (startLine !== undefined) {
+          fileUrl += `?start=${startLine}`
+          if (endLine !== undefined) {
+            fileUrl += `&end=${endLine}`
+          }
+        }
+
         parts.push({
           type: "file",
-          url: `file://${filepath}`,
+          url: fileUrl,
           filename: name,
           mime: "text/plain",
         })
@@ -787,6 +807,9 @@ export namespace SessionPrompt {
                   offset = Math.max(start - 1, 0)
                   if (end) {
                     limit = end - offset
+                  } else if (range.start != null && !range.end) {
+                    // Single line reference - read just 1 line
+                    limit = 1
                   }
                 }
                 const args = { filePath: filepath, offset, limit }
