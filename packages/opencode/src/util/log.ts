@@ -1,6 +1,6 @@
 import path from "path"
 import fs from "fs/promises"
-import { createWriteStream } from "fs"
+import { createWriteStream, type WriteStream } from "fs"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
@@ -52,13 +52,40 @@ export namespace Log {
   export function file() {
     return logpath
   }
+  let stream: WriteStream | undefined
+  let task = Promise.resolve()
   let write = (msg: any) => {
     process.stderr.write(msg)
     return msg.length
   }
 
+  async function drain() {
+    await task.catch(() => {})
+  }
+
+  export async function close() {
+    const next = stream
+    stream = undefined
+    write = (msg: any) => {
+      process.stderr.write(msg)
+      return msg.length
+    }
+    if (!next) return
+    await drain()
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error: Error) => reject(error)
+      next.once("error", fail)
+      next.end(() => {
+        next.off("error", fail)
+        resolve()
+      })
+    }).catch(() => {})
+  }
+
   export async function init(options: Options) {
+    await close()
     if (options.level) level = options.level
+    await fs.mkdir(Global.Path.log, { recursive: true })
     cleanup(Global.Path.log)
     if (options.print) return
     logpath = path.join(
@@ -66,14 +93,20 @@ export namespace Log {
       options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
     )
     await fs.truncate(logpath).catch(() => {})
-    const stream = createWriteStream(logpath, { flags: "a" })
+    stream = createWriteStream(logpath, { flags: "a" })
     write = async (msg: any) => {
-      return new Promise((resolve, reject) => {
-        stream.write(msg, (err) => {
-          if (err) reject(err)
-          else resolve(msg.length)
-        })
-      })
+      task = task.catch(() => {}).then(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            if (!stream) return resolve()
+            stream.write(msg, (err) => {
+              if (err) reject(err)
+              else resolve()
+            })
+          }),
+      )
+      await task
+      return msg.length
     }
   }
 

@@ -49,7 +49,9 @@ process.on("uncaughtException", (e) => {
 // Ensure the process exits on terminal hangup (eg. closing the terminal tab).
 // Without this, long-running commands like `serve` block on a never-resolving
 // promise and survive as orphaned processes.
-process.on("SIGHUP", () => process.exit())
+process.on("SIGHUP", () => {
+  void Log.close().finally(() => process.exit())
+})
 
 let cli = yargs(hideBin(process.argv))
   .parserConfiguration({ "populate--": true })
@@ -212,5 +214,6 @@ try {
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.
   // Explicitly exit to avoid any hanging subprocesses.
+  await Log.close()
   process.exit()
 }
