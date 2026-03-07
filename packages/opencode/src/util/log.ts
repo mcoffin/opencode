@@ -1,6 +1,6 @@
 import path from "path"
 import fs from "fs/promises"
-import { createWriteStream } from "fs"
+import { createWriteStream, type WriteStream } from "fs"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
@@ -52,41 +52,74 @@ export namespace Log {
   export function file() {
     return logpath
   }
+  let stream: WriteStream | undefined
+  let task = Promise.resolve()
   let write = (msg: any) => {
     process.stderr.write(msg)
     return msg.length
   }
 
+  async function drain() {
+    await task.catch(() => {})
+  }
+
+  export async function close() {
+    const next = stream
+    stream = undefined
+    write = (msg: any) => {
+      process.stderr.write(msg)
+      return msg.length
+    }
+    if (!next) return
+    await drain()
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error: Error) => reject(error)
+      next.once("error", fail)
+      next.end(() => {
+        next.off("error", fail)
+        resolve()
+      })
+    }).catch(() => {})
+  }
+
   export async function init(options: Options) {
+    await close()
     if (options.level) level = options.level
-    cleanup(Global.Path.log)
-    if (options.print) return
     logpath = path.join(
       Global.Path.log,
       options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
     )
-    await fs.truncate(logpath).catch(() => {})
-    const stream = createWriteStream(logpath, { flags: "a" })
+    void cleanup(Global.Path.log, logpath)
+    if (options.print) return
+    await fs.writeFile(logpath, "")
+    stream = createWriteStream(logpath, { flags: "a" })
     write = async (msg: any) => {
-      return new Promise((resolve, reject) => {
-        stream.write(msg, (err) => {
-          if (err) reject(err)
-          else resolve(msg.length)
-        })
-      })
+      task = task.catch(() => {}).then(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            if (!stream) return resolve()
+            stream.write(msg, (err) => {
+              if (err) reject(err)
+              else resolve()
+            })
+          }),
+      )
+      await task
+      return msg.length
     }
   }
 
-  async function cleanup(dir: string) {
-    const files = await Glob.scan("????-??-??T??????.log", {
+  async function cleanup(dir: string, current?: string) {
+    const files = (await Glob.scan("????-??-??T??????.log", {
       cwd: dir,
       absolute: true,
       include: "file",
-    })
-    if (files.length <= 5) return
+    }))
+      .filter((file) => file !== current)
+      .sort()
+    if (files.length <= 10) return
 
-    const filesToDelete = files.slice(0, -10)
-    await Promise.all(filesToDelete.map((file) => fs.unlink(file).catch(() => {})))
+    await Promise.all(files.slice(0, -10).map((file) => fs.unlink(file).catch(() => {})))
   }
 
   function formatError(error: Error, depth = 0): string {
