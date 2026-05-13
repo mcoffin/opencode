@@ -1,5 +1,6 @@
 import {
   APICallError,
+  JSONParseError,
   type JSONValue,
   type LanguageModelV3,
   type LanguageModelV3CallOptions,
@@ -17,6 +18,7 @@ import {
   parseProviderOptions,
   type ParseResult,
   postJsonToApi,
+  safeParseJSON,
 } from "@ai-sdk/provider-utils"
 import { z } from "zod/v4"
 import type { OpenAIConfig } from "./openai-config"
@@ -194,7 +196,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
     }
 
     const openaiOptions = await parseProviderOptions({
-      provider: "copilot",
+      provider: this.config.providerOptionsName ?? "copilot",
       providerOptions,
       schema: openaiResponsesProviderOptionsSchema,
     })
@@ -776,22 +778,54 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
   async doStream(options: LanguageModelV3CallOptions) {
     const { args: body, warnings, webSearchToolName } = await this.getArgs(options)
+    const headers = combineHeaders(this.config.headers(), options.headers)
+    const requestBody = sanitizeRequestBody(body)
 
-    const { responseHeaders, value: response } = await postJsonToApi({
-      url: this.config.url({
-        path: "/responses",
-        modelId: this.modelId,
-      }),
-      headers: combineHeaders(this.config.headers(), options.headers),
-      body: {
-        ...body,
-        stream: true,
-      },
-      failedResponseHandler: openaiFailedResponseHandler,
-      successfulResponseHandler: createEventSourceResponseHandler(openaiResponsesChunkSchema),
-      abortSignal: options.abortSignal,
-      fetch: this.config.fetch,
-    })
+    const { responseHeaders: rawResponseHeaders, value: response } = this.config.websocket
+      ? await openWebSocketResponsesStream({
+          url: this.config.url({
+            path: "/responses",
+            modelId: this.modelId,
+          }),
+          headers,
+          body: requestBody,
+          abortSignal: options.abortSignal,
+          createWebSocket: this.config.createWebSocket,
+          timeout: this.config.timeout,
+          chunkTimeout: this.config.chunkTimeout,
+        }).catch(() =>
+          postJsonToApi({
+            url: this.config.url({
+              path: "/responses",
+              modelId: this.modelId,
+            }),
+            headers,
+            body: {
+              ...requestBody,
+              stream: true,
+            },
+            failedResponseHandler: openaiFailedResponseHandler,
+            successfulResponseHandler: createEventSourceResponseHandler(openaiResponsesChunkSchema),
+            abortSignal: options.abortSignal,
+            fetch: this.config.fetch,
+          }),
+        )
+      : await postJsonToApi({
+          url: this.config.url({
+            path: "/responses",
+            modelId: this.modelId,
+          }),
+          headers,
+          body: {
+            ...requestBody,
+            stream: true,
+          },
+          failedResponseHandler: openaiFailedResponseHandler,
+          successfulResponseHandler: createEventSourceResponseHandler(openaiResponsesChunkSchema),
+          abortSignal: options.abortSignal,
+          fetch: this.config.fetch,
+        })
+    const responseHeaders = rawResponseHeaders instanceof Headers ? Object.fromEntries(rawResponseHeaders.entries()) : rawResponseHeaders
 
     // oxlint-disable-next-line no-this-alias -- needed for closure scope inside generator
     const self = this
@@ -1348,10 +1382,162 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
           },
         }),
       ),
-      request: { body },
+      request: { body: requestBody },
       response: { headers: responseHeaders },
     }
   }
+}
+
+function sanitizeRequestBody(body: Record<string, unknown>) {
+  const next = JSON.parse(JSON.stringify(body)) as Record<string, unknown>
+  if (next.store === true || !Array.isArray(next.input)) return next
+
+  for (const item of next.input) {
+    if (typeof item === "object" && item !== null && "id" in item) {
+      delete item.id
+    }
+  }
+
+  return next
+}
+
+function websocketURL(url: string) {
+  const next = new URL(url)
+  if (next.protocol === "http:") next.protocol = "ws:"
+  if (next.protocol === "https:") next.protocol = "wss:"
+  return next.toString()
+}
+
+function isTerminalChunk(chunk: z.infer<typeof openaiResponsesChunkSchema>) {
+  return isResponseFinishedChunk(chunk) || isErrorChunk(chunk)
+}
+
+function defaultCreateWebSocket(url: string, options: { headers: Record<string, string | undefined> }) {
+  if (typeof WebSocket === "undefined") {
+    throw new Error("WebSocket is not available in this runtime")
+  }
+
+  const headers = Object.fromEntries(Object.entries(options.headers).filter((entry): entry is [string, string] => !!entry[1]))
+  const Ctor = WebSocket as unknown as new (url: string, init?: { headers?: Record<string, string> }) => WebSocket
+  return new Ctor(url, { headers })
+}
+
+async function openWebSocketResponsesStream(input: {
+  url: string
+  headers: Record<string, string | undefined>
+  body: Record<string, unknown>
+  abortSignal: AbortSignal | undefined
+  createWebSocket: OpenAIConfig["createWebSocket"]
+  timeout: OpenAIConfig["timeout"]
+  chunkTimeout: OpenAIConfig["chunkTimeout"]
+}) {
+  let controller: ReadableStreamDefaultController<ParseResult<z.infer<typeof openaiResponsesChunkSchema>>> | undefined
+  const stream = new ReadableStream<ParseResult<z.infer<typeof openaiResponsesChunkSchema>>>({
+    start(next) {
+      controller = next
+    },
+  })
+  const createWebSocket = input.createWebSocket ?? defaultCreateWebSocket
+  const socket = createWebSocket(websocketURL(input.url), { headers: input.headers })
+
+  return await new Promise<{
+    responseHeaders: Record<string, string>
+    value: ReadableStream<ParseResult<z.infer<typeof openaiResponsesChunkSchema>>>
+  }>((resolve, reject) => {
+    let opened = false
+    let settled = false
+    let closed = false
+    let completed = false
+    let timeoutID: ReturnType<typeof setTimeout> | undefined
+    let chunkTimeoutID: ReturnType<typeof setTimeout> | undefined
+
+    const cleanup = () => {
+      if (input.abortSignal) input.abortSignal.removeEventListener("abort", onAbort)
+      if (timeoutID) clearTimeout(timeoutID)
+      if (chunkTimeoutID) clearTimeout(chunkTimeoutID)
+    }
+
+    const resetChunkTimeout = () => {
+      if (typeof input.chunkTimeout !== "number" || input.chunkTimeout <= 0) return
+      if (chunkTimeoutID) clearTimeout(chunkTimeoutID)
+      chunkTimeoutID = setTimeout(() => fail(new Error("OpenAI websocket chunk timed out")), input.chunkTimeout)
+    }
+
+    const close = () => {
+      if (closed) return
+      closed = true
+      cleanup()
+      try {
+        socket.close()
+      } catch {}
+      controller?.close()
+    }
+
+    const fail = (error: Error) => {
+      cleanup()
+      if (!opened && !settled) {
+        settled = true
+        reject(error)
+        try {
+          socket.close()
+        } catch {}
+        return
+      }
+      if (closed) return
+      controller?.enqueue({ success: false, error: new JSONParseError({ text: "", cause: error }), rawValue: undefined })
+      close()
+    }
+
+    const onAbort = () => fail(new Error("WebSocket request aborted"))
+
+    input.abortSignal?.addEventListener("abort", onAbort, { once: true })
+
+    if (typeof input.timeout === "number" && input.timeout > 0) {
+      timeoutID = setTimeout(() => fail(new Error("OpenAI websocket request timed out")), input.timeout)
+    }
+
+    socket.addEventListener("open", () => {
+      opened = true
+      if (!settled) {
+        settled = true
+        resolve({ responseHeaders: {}, value: stream })
+      }
+      socket.send(
+        JSON.stringify({
+          type: "response.create",
+          ...input.body,
+        }),
+      )
+      resetChunkTimeout()
+    })
+
+    socket.addEventListener("message", (event) => {
+      if (closed) return
+      resetChunkTimeout()
+      const raw = typeof event.data === "string" ? event.data : String(event.data)
+
+      void safeParseJSON({ text: raw, schema: openaiResponsesChunkSchema }).then((result) => {
+        if (closed) return
+        controller?.enqueue(result)
+        if (result.success && isTerminalChunk(result.value)) {
+          completed = true
+          close()
+        }
+      })
+    })
+
+    socket.addEventListener("error", () => fail(new Error("OpenAI websocket request failed")))
+    socket.addEventListener("close", () => {
+      if (!opened && !settled) {
+        settled = true
+        cleanup()
+        reject(new Error("OpenAI websocket closed before opening"))
+        return
+      }
+      if (closed || completed) return
+      fail(new Error("OpenAI websocket closed before completion"))
+    })
+  })
 }
 
 const usageSchema = z.object({

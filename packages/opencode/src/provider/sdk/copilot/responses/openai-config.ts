@@ -1,10 +1,20 @@
 import type { FetchFunction } from "@ai-sdk/provider-utils"
 
+export type OpenAIWebSocketFactory = (
+  url: string,
+  options: { headers: Record<string, string | undefined> },
+) => WebSocket
+
 export type OpenAIConfig = {
   provider: string
+  providerOptionsName?: string
   url: (options: { modelId: string; path: string }) => string
   headers: () => Record<string, string | undefined>
   fetch?: FetchFunction
+  websocket?: boolean
+  createWebSocket?: OpenAIWebSocketFactory
+  timeout?: number | false
+  chunkTimeout?: number
   generateId?: () => string
   /**
    * File ID prefixes used to identify file IDs in Responses API.

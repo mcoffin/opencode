@@ -54,6 +54,12 @@ export const Model = Schema.Struct({
   provider: Schema.optional(
     Schema.Struct({ npm: Schema.optional(Schema.String), api: Schema.optional(Schema.String) }),
   ),
+  endpoint: Schema.optional(
+    Schema.Struct({
+      type: Schema.Literal("openai/responses"),
+      websocket: Schema.optional(Schema.Boolean),
+    }),
+  ),
   options: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   variants: Schema.optional(

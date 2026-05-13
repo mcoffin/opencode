@@ -1821,6 +1821,42 @@ test("custom model inherits npm package from models.dev provider config", async 
   })
 })
 
+test("openai model preserves endpoint websocket config", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            openai: {
+              models: {
+                "gpt-5": {
+                  endpoint: {
+                    type: "openai/responses",
+                    websocket: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      set("OPENAI_API_KEY", "test-api-key")
+      const model = await getModel(ProviderID.openai, ModelID.make("gpt-5"))
+      expect(model.endpoint).toEqual({
+        type: "openai/responses",
+        websocket: true,
+      })
+    },
+  })
+})
+
 test("custom model inherits api.url from models.dev provider", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

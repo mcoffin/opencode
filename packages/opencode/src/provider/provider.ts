@@ -98,7 +98,7 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "@ai-sdk/google-vertex": () => import("@ai-sdk/google-vertex").then((m) => m.createVertex),
   "@ai-sdk/google-vertex/anthropic": () =>
     import("@ai-sdk/google-vertex/anthropic").then((m) => m.createVertexAnthropic),
-  "@ai-sdk/openai": () => import("@ai-sdk/openai").then((m) => m.createOpenAI),
+  "@ai-sdk/openai": () => import("./sdk/openai/openai-provider").then((m) => m.createOpenAI),
   "@ai-sdk/openai-compatible": () => import("@ai-sdk/openai-compatible").then((m) => m.createOpenAICompatible),
   "@openrouter/ai-sdk-provider": () => import("@openrouter/ai-sdk-provider").then((m) => m.createOpenRouter),
   "@ai-sdk/xai": () => import("@ai-sdk/xai").then((m) => m.createXai),
@@ -889,6 +889,11 @@ const ProviderLimit = Schema.Struct({
   output: Schema.Finite,
 })
 
+const ProviderEndpoint = Schema.Struct({
+  type: Schema.Literal("openai/responses"),
+  websocket: optionalOmitUndefined(Schema.Boolean),
+})
+
 export const Model = Schema.Struct({
   id: ModelID,
   providerID: ProviderID,
@@ -899,6 +904,7 @@ export const Model = Schema.Struct({
   cost: ProviderCost,
   limit: ProviderLimit,
   status: ModelStatus,
+  endpoint: optionalOmitUndefined(ProviderEndpoint),
   options: Schema.Record(Schema.String, Schema.Any),
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
@@ -996,6 +1002,7 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
 }
 
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
+  const apiNpm = model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible"
   const base: Model = {
     id: ModelID.make(model.id),
     providerID: ProviderID.make(provider.id),
@@ -1004,9 +1011,10 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     api: {
       id: model.id,
       url: model.provider?.api ?? provider.api ?? "",
-      npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
+      npm: apiNpm,
     },
     status: model.status ?? "active",
+    endpoint: apiNpm === "@ai-sdk/openai" ? { type: "openai/responses" } : undefined,
     headers: {},
     options: {},
     cost: cost(model.cost),
@@ -1250,6 +1258,10 @@ const layer: Layer.Layer<
                   write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? 0,
                 },
               },
+              endpoint:
+                model.endpoint ??
+                existingModel?.endpoint ??
+                (apiNpm === "@ai-sdk/openai" ? { type: "openai/responses" } : undefined),
               options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
               limit: {
                 context: model.limit?.context ?? existingModel?.limit?.context ?? 0,
@@ -1429,6 +1441,10 @@ const layer: Layer.Layer<
         const provider = s.providers[model.providerID]
         const options = { ...provider.options }
 
+        if (model.endpoint?.type === "openai/responses" && model.endpoint.websocket) {
+          options["websocket"] = true
+        }
+
         if (model.providerID === "google-vertex" && !model.api.npm.includes("@ai-sdk/openai-compatible")) {
           delete options.fetch
         }
@@ -1479,6 +1495,10 @@ const layer: Layer.Layer<
         const customFetch = options["fetch"]
         const chunkTimeout = options["chunkTimeout"]
         delete options["chunkTimeout"]
+
+        if (model.api.npm === "@ai-sdk/openai" && options["websocket"] && chunkTimeout !== undefined) {
+          options["chunkTimeout"] = chunkTimeout
+        }
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
