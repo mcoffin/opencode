@@ -14,7 +14,7 @@ import { FileRetention } from "./file-retention.js"
 import { Location } from "./location.js"
 import { Global } from "@opencode-ai/util/global"
 import { ShellSelect } from "./shell/select.js"
-import type { ShellCreateBefore } from "@opencode-ai/plugin/effect/shell"
+import type { ShellCreateBefore, ShellSandbox } from "@opencode-ai/plugin/effect/shell"
 import { PluginHooks } from "./plugin/hooks.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { SessionSchema } from "./session/schema.js"
@@ -240,8 +240,22 @@ const layer = () =>
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)
 
+        // Sandbox hooks get a copy of the invocation so a wrapper cannot change what the user sees: only the
+        // rewritten command and env are taken back, while `invocation.command` still drives Shell.Info, events,
+        // and the permission review that already ran in `before`. The copy starts from the deprecated
+        // `execution_command` when a create.before hook set one, so the two forms compose.
+        const sandbox: ShellSandbox = {
+          command: invocation.execution_command ?? invocation.command,
+          env: { ...invocation.env },
+          cwd: invocation.cwd,
+          timeout: invocation.timeout,
+          shell: invocation.shell,
+        }
+        yield* hooks.trigger("shell", "sandbox", sandbox)
+        invocation.env = sandbox.env
+
         const id = Shell.ID.ascending()
-        const args = ShellSelect.args(invocation.shell, invocation.execution_command ?? invocation.command)
+        const args = ShellSelect.args(invocation.shell, sandbox.command)
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {

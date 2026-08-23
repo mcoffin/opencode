@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Message, SystemPart } from "@opencode-ai/ai"
-import type { ShellCreateBefore } from "@opencode-ai/plugin/effect/shell"
+import type { ShellCreateBefore, ShellSandbox } from "@opencode-ai/plugin/effect/shell"
 import { Agent } from "@opencode-ai/schema/agent"
 import { Model } from "@opencode-ai/schema/model"
 import { Provider } from "@opencode-ai/schema/provider"
@@ -84,6 +84,34 @@ describe("PluginHooks", () => {
       expect(yield* hooks.trigger("shell", "create.before", event)).toBe(event)
       expect(event.command).toBe("echo original")
       expect(event.execution_command).toBe("echo wrapped")
+    }),
+  )
+
+  it.effect("chains shell sandbox rewrites of the command and env", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("shell", "sandbox", (event) =>
+        Effect.sync(() => {
+          event.command = `firejail -- ${event.command}`
+        }),
+      )
+      yield* hooks.register("shell", "sandbox", (event) =>
+        Effect.sync(() => {
+          event.command = `${event.command} --seen-in=${event.cwd}`
+          event.env = { ...event.env, SANDBOX: "1" }
+        }),
+      )
+      const event: ShellSandbox = {
+        command: "echo original",
+        env: {},
+        cwd: "/tmp",
+        timeout: 0,
+        shell: "/bin/sh",
+      }
+
+      expect(yield* hooks.trigger("shell", "sandbox", event)).toBe(event)
+      expect(event.command).toBe("firejail -- echo original --seen-in=/tmp")
+      expect(event.env).toEqual({ SANDBOX: "1" })
     }),
   )
 })

@@ -206,7 +206,7 @@ export const Plugin = {
                     if (!unrestricted) {
                       const portable =
                         Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-                      // Review the display command; a sandbox wrapper in execution_command is not reviewed.
+                      // Review the display command; a `shell.sandbox` wrapper is intentionally not reviewed.
                       const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, {
                         portable,
                       })
