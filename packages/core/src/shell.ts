@@ -241,7 +241,7 @@ const layer = () =>
         if (before) yield* before(invocation)
 
         const id = Shell.ID.ascending()
-        const args = ShellSelect.args(invocation.shell, invocation.command)
+        const args = ShellSelect.args(invocation.shell, invocation.execution_command ?? invocation.command)
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {

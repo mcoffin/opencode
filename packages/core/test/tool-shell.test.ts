@@ -29,6 +29,7 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { Permission } from "@opencode-ai/core/permission"
+import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
 import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Shell } from "@opencode-ai/core/shell"
@@ -878,6 +879,61 @@ describe("ShellTool", () => {
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+  )
+
+  it.live("spawns the hook execution_command while reporting the display command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const shell = yield* Shell.Service
+            yield* hooks.register("shell", "create.before", (event) =>
+              Effect.sync(() => {
+                event.execution_command = isWindows ? "[Console]::Out.Write('wrapped')" : "printf wrapped"
+              }),
+            )
+
+            const info = yield* shell.create({ command: "execution-command-never-runs", timeout: 0 })
+            expect(info.command).toBe("execution-command-never-runs")
+            const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            expect(settled._tag).toBe("Some")
+            if (settled._tag !== "Some") return
+            expect(settled.value.status).toBe("exited")
+            expect((yield* shell.output(info.id)).output).toBe("wrapped")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live(
+    "requests permission for the hook execution_command rather than the display command",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const hooks = yield* PluginHooks.Service
+              yield* hooks.register("shell", "create.before", (event) =>
+                Effect.sync(() => {
+                  event.execution_command = isWindows ? "[Console]::Out.Write('wrapped')" : "printf wrapped"
+                }),
+              )
+
+              const settled = yield* executeTool(registry, call({ command: "display-only" }))
+              expect(settled.status).toBe("completed")
+              expect(settled.content?.[0]).toEqual({ type: "text", text: "wrapped" })
+              expect(JSON.stringify(assertions)).not.toContain("display-only")
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
   )
 
   if (!isWindows) {

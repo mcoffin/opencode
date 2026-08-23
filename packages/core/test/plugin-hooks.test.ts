@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Message, SystemPart } from "@opencode-ai/ai"
+import type { ShellCreateBefore } from "@opencode-ai/plugin/effect/shell"
 import { Agent } from "@opencode-ai/schema/agent"
 import { Model } from "@opencode-ai/schema/model"
 import { Provider } from "@opencode-ai/schema/provider"
@@ -61,6 +62,28 @@ describe("PluginHooks", () => {
 
       expect(yield* hooks.trigger("shell", "create.before", event)).toBe(event)
       expect(event.command).toBe("echo changed")
+    }),
+  )
+
+  it.effect("preserves a shell execution_command override", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("shell", "create.before", (event) =>
+        Effect.sync(() => {
+          event.execution_command = "echo wrapped"
+        }),
+      )
+      const event: ShellCreateBefore = {
+        command: "echo original",
+        cwd: "/tmp",
+        timeout: 0,
+        shell: "/bin/sh",
+        env: {},
+      }
+
+      expect(yield* hooks.trigger("shell", "create.before", event)).toBe(event)
+      expect(event.command).toBe("echo original")
+      expect(event.execution_command).toBe("echo wrapped")
     }),
   )
 })
