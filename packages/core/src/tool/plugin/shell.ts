@@ -206,14 +206,10 @@ export const Plugin = {
                     if (!unrestricted) {
                       const portable =
                         Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-                      // Permission resources must cover the command that actually runs, not only the
-                      // display command a plugin may have overridden for execution.
-                      const parsed = yield* ShellParse.scan(
-                        invocation.execution_command ?? invocation.command,
-                        invocation.shell,
-                        target.absolute,
-                        { portable },
-                      )
+                      // Review the display command; a sandbox wrapper in execution_command is not reviewed.
+                      const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, {
+                        portable,
+                      })
                       const directories = yield* Effect.forEach(parsed.directories, (directory) =>
                         mutation.resolve({ path: path.resolve(target.absolute, directory), kind: "directory" }),
                       )

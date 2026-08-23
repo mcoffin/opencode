@@ -909,7 +909,7 @@ describe("ShellTool", () => {
   )
 
   it.live(
-    "requests permission for the hook execution_command rather than the display command",
+    "reviews the display command for permission while running the hook execution_command",
     () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
@@ -924,10 +924,11 @@ describe("ShellTool", () => {
                 }),
               )
 
-              const settled = yield* executeTool(registry, call({ command: "display-only" }))
+              const settled = yield* executeTool(registry, call({ command: helloCommand }))
               expect(settled.status).toBe("completed")
               expect(settled.content?.[0]).toEqual({ type: "text", text: "wrapped" })
-              expect(JSON.stringify(assertions)).not.toContain("display-only")
+              expect(JSON.stringify(assertions)).toContain(isWindows ? "Start-Sleep -Milliseconds 100" : helloCommand)
+              expect(JSON.stringify(assertions)).not.toContain("wrapped")
             }),
           )
         },

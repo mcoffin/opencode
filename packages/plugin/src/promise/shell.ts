@@ -3,8 +3,8 @@ import type { Hooks } from "./registration.js"
 export interface ShellCreateBefore {
   command: string
   /**
-   * Command actually passed to the shell process. When set, `command` remains
-   * the user-visible value in shell info and events.
+   * Sandbox form of `command` that is actually passed to the shell process. Permission review
+   * and shell info/events keep reporting `command`.
    */
   execution_command?: string
   cwd: string
