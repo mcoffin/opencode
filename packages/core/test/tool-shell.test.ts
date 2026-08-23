@@ -30,6 +30,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { Permission } from "@opencode-ai/core/permission"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
+import { PluginHooks } from "@opencode-ai/core/plugin/hooks"
 import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Shell } from "@opencode-ai/core/shell"
@@ -184,6 +185,10 @@ const mixedOutputCommand = isWindows
   ? "[Console]::Out.Write('stdout'); Start-Sleep -Milliseconds 50; [Console]::Error.Write('stderr'); Start-Sleep -Milliseconds 100"
   : "printf stdout; sleep 0.05; printf stderr >&2"
 const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
+const wrappedCommand = isWindows ? "[Console]::Out.Write('wrapped')" : "printf wrapped"
+const sandboxEnvCommand = isWindows
+  ? "[Console]::Out.Write($env:OPENCODE_SANDBOX_TEST)"
+  : 'printf %s "$OPENCODE_SANDBOX_TEST"'
 const timeoutOutputCommand = isWindows
   ? "[Console]::Out.Write('before timeout'); Start-Sleep -Seconds 60"
   : "printf 'before timeout'; sleep 60"
@@ -1457,6 +1462,117 @@ describe("ShellTool", () => {
             const info = yield* shell.create({ command: helloCommand, timeout: 0 })
             const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
             expect(settled._tag).toBe("Some")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("spawns the sandbox command while reporting the display command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const shell = yield* Shell.Service
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                event.command = wrappedCommand
+              }),
+            )
+
+            const info = yield* shell.create({ command: "sandbox-command-never-runs", timeout: 0 })
+            expect(info.command).toBe("sandbox-command-never-runs")
+            const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            expect(settled._tag).toBe("Some")
+            if (settled._tag !== "Some") return
+            expect(settled.value.status).toBe("exited")
+            expect((yield* shell.output(info.id)).output).toBe("wrapped")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live(
+    "reviews the display command for permission while running the sandbox command",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const hooks = yield* PluginHooks.Service
+              yield* hooks.register("shell", "sandbox", (event) =>
+                Effect.sync(() => {
+                  event.command = wrappedCommand
+                }),
+              )
+
+              const settled = yield* executeTool(registry, call({ command: helloCommand }))
+              expect(settled.status).toBe("completed")
+              expect(settled.content?.[0]).toEqual({ type: "text", text: "wrapped" })
+              expect(JSON.stringify(assertions)).toContain(isWindows ? "Start-Sleep -Milliseconds 100" : helloCommand)
+              expect(JSON.stringify(assertions)).not.toContain("wrapped")
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  it.live("applies sandbox env edits to the spawned process", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const shell = yield* Shell.Service
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                event.env = { ...event.env, OPENCODE_SANDBOX_TEST: "sandboxed" }
+                event.command = sandboxEnvCommand
+              }),
+            )
+
+            const info = yield* shell.create({ command: "sandbox-env-never-runs", timeout: 0 })
+            const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            expect(settled._tag).toBe("Some")
+            expect((yield* shell.output(info.id)).output).toBe("sandboxed")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("discards sandbox edits outside command and env", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const shell = yield* Shell.Service
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                // `cwd`/`timeout`/`shell` are readonly on the payload; a plugin that casts them away
+                // still must not move the shell the user asked for.
+                const forced = event as { cwd: string; timeout: number }
+                forced.cwd = path.join(tmp.path, "elsewhere")
+                forced.timeout = 5
+              }),
+            )
+
+            const info = yield* shell.create({ command: helloCommand, cwd: tmp.path, timeout: 0 })
+            expect(info.cwd).toBe(realpathSync(tmp.path))
+            const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            expect(settled._tag).toBe("Some")
+            if (settled._tag !== "Some") return
+            expect(settled.value.status).toBe("exited")
           }),
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
