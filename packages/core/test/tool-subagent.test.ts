@@ -8,6 +8,7 @@ import { Global } from "@opencode-ai/util/global"
 import { makeGlobalNode, makeLocationNode } from "@opencode-ai/util/effect/app-node"
 import { Database } from "@opencode-ai/core/database/database"
 import { Bus } from "@opencode-ai/core/bus"
+import { Catalog } from "@opencode-ai/core/catalog"
 import { Config } from "@opencode-ai/core/config"
 import { Location } from "@opencode-ai/core/location"
 import { Model } from "@opencode-ai/core/model"
@@ -102,7 +103,7 @@ const subagentPluginSupervisor = makeLocationNode({
     PluginSupervisor.Service,
     registerToolPlugin(SubagentTool.Plugin).pipe(Effect.as(PluginSupervisor.Service.of({ flush: Effect.void }))),
   ),
-  deps: [Agent.node, Config.node, Permission.node, PluginRuntime.node, Tool.node],
+  deps: [Agent.node, Catalog.node, Config.node, Permission.node, PluginRuntime.node, Tool.node],
 })
 
 const nodes = LayerNode.group([
@@ -141,6 +142,23 @@ const withSubagent = (location: Location.Ref) =>
         })
         draft.update(Agent.ID.make("primary"), (agent) => {
           agent.mode = "primary"
+        })
+      }),
+    ).pipe(Effect.provide(locations.get(location)))
+    yield* Catalog.Service.use((catalog) =>
+      catalog.transform((draft) => {
+        draft.provider.update(Provider.ID.make("test"), (provider) => {
+          provider.activation = "enabled"
+        })
+        draft.model.update(Provider.ID.make("test"), Model.ID.make("child"), (model) => {
+          model.enabled = true
+        })
+        draft.model.update(Provider.ID.make("test"), Model.ID.make("parent"), (model) => {
+          model.enabled = true
+        })
+        draft.model.update(Provider.ID.make("test"), Model.ID.make("override"), (model) => {
+          model.enabled = true
+          model.variants = [{ id: Model.VariantID.make("high"), settings: {}, headers: {}, body: {} }]
         })
       }),
     ).pipe(Effect.provide(locations.get(location)))
@@ -604,6 +622,258 @@ describe("SubagentTool", () => {
           expect(synthetic).toHaveLength(1)
           expect(synthetic[0]?.text).toContain(`<subagent sessionID="${childID}" state="completed"`)
           expect(synthetic[0]?.text).toContain(childText)
+        }),
+      ),
+    ),
+  )
+
+  it.live("uses an explicit model override over the agent's configured model", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const settled = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-override",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "override", prompt: "test", model: "test/override" },
+            },
+          })
+
+          expect(settled).toMatchObject({
+            status: "completed",
+            metadata: { status: "completed" },
+            content: [{ type: "text", text: expect.stringContaining(childText) }],
+          })
+          const child = yield* sessions.get(outputSessionID(settled.metadata))
+          expect(child.model).toMatchObject({ id: Model.ID.make("override"), providerID: Provider.ID.make("test") })
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects malformed model references", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const result = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-bad-model",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "bad", prompt: "test", model: "gpt-5" },
+            },
+          })
+
+          expect(result.status).toBe("error")
+          expect(result.error?.message).toContain("Invalid model reference")
+          expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects unavailable model references with a list of available models", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const result = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-unavailable-model",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "unavailable", prompt: "test", model: "test/nonexistent" },
+            },
+          })
+
+          expect(result.status).toBe("error")
+          expect(result.error?.message).toContain("Model unavailable")
+          expect(result.error?.message).toContain("test/child")
+          expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects unavailable model variants before creating a child session", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const result = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-unavailable-model-variant",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "unavailable variant",
+                prompt: "test",
+                model: "test/override#fast",
+              },
+            },
+          })
+
+          expect(result.status).toBe("error")
+          expect(result.error?.message).toContain("Model unavailable: test/override#fast")
+          expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+        }),
+      ),
+    ),
+  )
+
+  it.live("switches the child's model on continuation with an override", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const first = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-first",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "review", prompt: "review this" },
+            },
+          })
+          const childID = outputSessionID(first.metadata)
+
+          const second = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-override",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "override",
+                prompt: "continue",
+                sessionID: childID,
+                model: "test/override",
+              },
+            },
+          })
+
+          expect(outputSessionID(second.metadata)).toBe(childID)
+          expect((yield* sessions.get(childID)).model).toMatchObject({
+            id: Model.ID.make("override"),
+            providerID: Provider.ID.make("test"),
+          })
+        }),
+      ),
+    ),
+  )
+
+  it.live("preserves a model override across continuations without an override", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+
+          const first = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-first",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "override",
+                prompt: "review",
+                model: "test/override",
+              },
+            },
+          })
+          const childID = outputSessionID(first.metadata)
+
+          const second = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-continue",
+              name: SubagentTool.name,
+              input: {
+                agent: "reviewer",
+                description: "continue",
+                prompt: "continue",
+                sessionID: childID,
+              },
+            },
+          })
+
+          expect(outputSessionID(second.metadata)).toBe(childID)
+          expect((yield* sessions.get(childID)).model).toMatchObject({
+            id: Model.ID.make("override"),
+            providerID: Provider.ID.make("test"),
+          })
         }),
       ),
     ),
