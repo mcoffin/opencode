@@ -4,8 +4,10 @@ import { ToolFailure } from "@opencode-ai/ai"
 import type { Context } from "@opencode-ai/plugin/effect/plugin"
 import { Effect, Schema, Scope } from "effect"
 import { Agent } from "../../agent.js"
+import { Catalog } from "../../catalog.js"
 import { Config } from "../../config.js"
 import { Job } from "../../job.js"
+import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
@@ -28,6 +30,10 @@ export const Input = Schema.Struct({
   agent: Schema.String.annotate({ description: "The type of specialized agent to use for this task" }),
   description: Schema.String.annotate({ description: "A short 3-5 word label for the task, displayed to the user" }),
   prompt: Schema.String.annotate({ description: "The task for the subagent to perform" }),
+  model: Schema.optionalKey(Schema.String).annotate({
+    description:
+      'Optional model override for the child session, formatted "provider/model" with an optional "#variant" (e.g. "anthropic/claude-sonnet-4-5"). Overrides the model configured on the agent and persists for the child session.',
+  }),
   sessionID: Schema.optionalKey(SessionSchema.ID).annotate({
     description:
       "Continue a specific previous subagent conversation by passing its sessionID. Calls without a sessionID start a new conversation.",
@@ -50,6 +56,7 @@ export const description = [
   "Foreground (default) runs the subagent to completion and returns its final response.",
   "Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
   "Use background only for independent work that can run while you continue elsewhere.",
+  "Pass `model` to override the agent's configured model for the child session.",
 ].join("\n")
 
 export const Plugin = {
@@ -58,6 +65,7 @@ export const Plugin = {
     const sessions = yield* Session.Service
     const jobs = yield* Job.Service
     const agents = yield* Agent.Service
+    const catalog = yield* Catalog.Service
     const config = yield* Config.Service
     const permission = yield* Permission.Service
     const scope = yield* Scope.Scope
@@ -95,6 +103,36 @@ export const Plugin = {
         Effect.ensuring(Effect.sync(() => notifications.delete(key))),
         Effect.forkIn(scope, { startImmediately: true }),
       )
+    })
+
+    const selectModel = Effect.fn("SubagentTool.selectModel")(function* (input: string) {
+      const ref = yield* Effect.try({
+        try: () => Model.Ref.parse(input),
+        catch: (error) =>
+          new ToolFailure({
+            message: `Invalid model reference: ${input}. Expected "provider/model" with an optional "#variant".`,
+            error,
+          }),
+      })
+      const available = yield* catalog.model.available()
+      if (
+        !available.some(
+          (item) =>
+            item.providerID === ref.providerID &&
+            item.id === ref.id &&
+            (ref.variant === undefined ||
+              ref.variant === "default" ||
+              item.variants.some((variant) => variant.id === ref.variant)),
+        )
+      ) {
+        const list = available.map((item) => `${item.providerID}/${item.id}`)
+        const message =
+          list.length === 0
+            ? `Model unavailable: ${input}. No models are available.`
+            : `Model unavailable: ${input}. Available: ${list.join(", ")}`
+        return yield* new ToolFailure({ message })
+      }
+      return ref
     })
 
     yield* ctx.tool
@@ -135,6 +173,7 @@ export const Plugin = {
               if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${input.agent}` })
               if (agent.mode === "primary")
                 return yield* new ToolFailure({ message: `Agent ${input.agent} cannot run as a subagent` })
+              const model = input.model === undefined ? agent.model : yield* selectModel(input.model)
               yield* permission
                 .assert({
                   action: name,
@@ -168,21 +207,33 @@ export const Plugin = {
               // Continuing with a different agent switches the child, mirroring create semantics
               // where the agent's configured model wins over the inherited one.
               if (existing !== undefined && existing.agent !== agent.id) {
-                yield* sessions.switchAgent({ sessionID: existing.id, agent: agent.id }).pipe(
-                  Effect.andThen(
-                    agent.model === undefined
-                      ? Effect.void
-                      : sessions.switchModel({ sessionID: existing.id, model: agent.model }),
-                  ),
-                  Effect.mapError(
-                    (error) =>
-                      new ToolFailure({ message: `Failed to switch subagent session agent: ${existing.id}`, error }),
-                  ),
-                )
+                yield* sessions
+                  .switchAgent({ sessionID: existing.id, agent: agent.id })
+                  .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({ message: `Failed to switch subagent session agent: ${existing.id}`, error }),
+                    ),
+                  )
+              }
+              // The target model is the override or the agent's configured model. An override applies even
+              // when the agent is unchanged; a same-agent continuation without one keeps the child's model.
+              if (
+                existing !== undefined &&
+                model !== undefined &&
+                (input.model !== undefined || existing.agent !== agent.id)
+              ) {
+                yield* sessions
+                  .switchModel({ sessionID: existing.id, model })
+                  .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({ message: `Failed to switch subagent session model: ${existing.id}`, error }),
+                    ),
+                  )
               }
 
-              // Model selection is policy/config/session state, not an LLM-facing tool argument.
-              const model = agent.model ?? parent.model
+              // Precedence: explicit override > agent's configured model > inherited parent model.
               const child =
                 existing ??
                 (yield* sessions
@@ -190,7 +241,7 @@ export const Plugin = {
                     parentID: context.sessionID,
                     title: input.description,
                     agent: Agent.ID.make(input.agent),
-                    model,
+                    model: model ?? parent.model,
                   })
                   .pipe(
                     Effect.mapError(
