@@ -7,6 +7,7 @@ import { Directory, Document, Event, Info } from "@opencode-ai/schema/config"
 import { Session } from "@opencode-ai/schema/session"
 import { SessionInbox } from "@opencode-ai/schema/session-inbox"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { Agent } from "@opencode-ai/core/agent"
 import { Command } from "@opencode-ai/core/command"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCommandPlugin } from "@opencode-ai/core/config/plugin/command"
@@ -20,6 +21,7 @@ import { Global } from "@opencode-ai/util/global"
 import { AppProcess } from "@opencode-ai/util/process"
 import { Location } from "@opencode-ai/core/location"
 import { MCP } from "@opencode-ai/core/mcp/index"
+import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { ShellSelect } from "@opencode-ai/core/shell/select"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -41,7 +43,16 @@ const shellLayer = Layer.succeed(
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Command.node, Bus.node, FSUtil.node, AppProcess.node, Location.node, ShellSelect.node]),
+    LayerNode.group([
+      Agent.node,
+      Command.node,
+      Bus.node,
+      FSUtil.node,
+      AppProcess.node,
+      Location.node,
+      PluginRuntime.node,
+      ShellSelect.node,
+    ]),
     [
       [MCP.node, emptyMcpLayer],
       [Config.node, emptyConfigLayer],
@@ -431,9 +442,7 @@ function sourceCases() {
     {
       name: "updated",
       prepare: (directory: string) =>
-        Effect.promise(() =>
-          fs.writeFile(path.join(directory, "review.md"), markdown("Review first", "Review first")),
-        ),
+        Effect.promise(() => fs.writeFile(path.join(directory, "review.md"), markdown("Review first", "Review first"))),
       mutate: (directory: string) =>
         Effect.promise(async () => {
           const file = path.join(directory, "review.md")

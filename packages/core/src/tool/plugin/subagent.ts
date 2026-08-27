@@ -8,19 +8,9 @@ import { Config } from "../../config.js"
 import { PluginRuntime } from "../../plugin/runtime.js"
 import { Permission } from "../../permission.js"
 import { SessionSchema } from "../../session/schema.js"
+import { Subagent } from "../../subagent.js"
 
 export const name = "subagent"
-
-const NO_TEXT = "Subagent completed without a text response."
-const backgroundResult = (sessionID: SessionSchema.ID) => ({
-  sessionID,
-  status: "running" as const,
-  output: [
-    `The subagent is working in the background (sessionID: ${sessionID}). You will be notified automatically when it finishes.`,
-    "DO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; avoid working with the same files or topics it is using.",
-    "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
-  ].join("\n"),
-})
 
 export const Input = Schema.Struct({
   agent: Schema.String.annotate({ description: "The type of specialized agent to use for this task" }),
@@ -58,58 +48,6 @@ export const Plugin = {
     const config = yield* Config.Service
     const permission = yield* Permission.Service
     const scope = yield* Scope.Scope
-    // One completion observer per job generation. Keyed by child plus start time so a fresh
-    // continuation job is observable even while a settled generation's observer is finalizing.
-    const notifications = new Set<string>()
-
-    // Concatenate the child's final completed assistant text. Distinguishes "completed with no
-    // text" (generic string) from "failed" (the run effect fails, surfaced as a job error).
-    const latestAssistantText = Effect.fn("SubagentTool.latestAssistantText")(function* (sessionID: SessionSchema.ID) {
-      const messages = yield* runtime.session.messages({ sessionID, order: "desc", limit: 20 })
-      const assistant = messages.find(
-        (message) =>
-          message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
-      )
-      if (assistant === undefined || assistant.type !== "assistant") return NO_TEXT
-      const text = assistant.content
-        .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-        .map((part) => part.text)
-        .join("")
-      return text.length > 0 ? text : NO_TEXT
-    })
-
-    const notifyWhenDone = Effect.fn("SubagentTool.notifyWhenDone")(function* (
-      parentID: SessionSchema.ID,
-      childID: SessionSchema.ID,
-      agent: string,
-      description: string,
-      startedAt: number,
-    ) {
-      const key = `${childID}:${startedAt}`
-      if (notifications.has(key)) return
-      notifications.add(key)
-      yield* Effect.gen(function* () {
-        const info = (yield* runtime.job.wait({ id: childID })).info
-        if (!info || info.status === "running") return
-        const text =
-          info.status === "completed"
-            ? (info.output ?? NO_TEXT)
-            : info.status === "error"
-              ? (info.error ?? "Subagent failed")
-              : "Subagent cancelled"
-        yield* runtime.session.synthetic({
-          ...(info.notificationID ? { id: info.notificationID } : {}),
-          sessionID: parentID,
-          text: `<subagent sessionID="${childID}" state="${info.status}" description="${description}">\n${text}\n</subagent>`,
-          description,
-          metadata: { source: "subagent", childID, agent, state: info.status },
-        })
-        if (info.notificationID) yield* runtime.job.completeBackground(info.notificationID)
-      }).pipe(
-        Effect.ensuring(Effect.sync(() => notifications.delete(key))),
-        Effect.forkIn(scope, { startImmediately: true }),
-      )
-    })
 
     yield* ctx.tool
       .transform((draft) =>
@@ -195,89 +133,32 @@ export const Plugin = {
                 )
               }
 
-              // Model selection is policy/config/session state, not an LLM-facing tool argument.
-              const model = agent.model ?? parent.model
-              const child =
-                existing ??
-                (yield* runtime.session
-                  .create({
-                    parentID: context.sessionID,
-                    title: input.description,
-                    agent: Agent.ID.make(input.agent),
-                    model,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      (error) => new ToolFailure({ message: `Parent session not found: ${context.sessionID}`, error }),
-                    ),
-                  ))
-
-              const background = input.background === true
-              yield* context.progress({ sessionID: child.id, status: "running" })
-
-              // Standard prompt admission outside the job: Job.start joining a running child skips
-              // its run effect, and the default wake starts an idle child or steers a running one.
-              yield* runtime.session
-                .prompt({
-                  sessionID: child.id,
-                  text:
-                    existing === undefined
-                      ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
-                      : input.prompt,
-                  ...(background && existing === undefined ? { resume: false } : {}),
-                })
-                .pipe(
-                  Effect.mapError(
-                    (error) => new ToolFailure({ message: `Failed to prompt subagent: ${child.id}`, error }),
-                  ),
-                )
-
-              const info = yield* runtime.job.start({
-                id: child.id,
-                type: name,
+              const result = yield* Subagent.run({
+                runtime,
+                scope,
+                parentID: context.sessionID,
+                agent,
                 title: input.description,
-                metadata: {},
-                recovery: {
-                  kind: "subagent",
-                  parentSessionID: context.sessionID,
-                  childSessionID: child.id,
-                  agent: agent.name,
-                  description: input.description,
-                },
-                run: runtime.session.resume(child.id).pipe(Effect.andThen(latestAssistantText(child.id))),
-              })
-
-              if (background) {
-                yield* runtime.job.background(info.id)
-                yield* notifyWhenDone(context.sessionID, child.id, agent.name, input.description, info.started_at)
-                return backgroundResult(child.id)
-              }
-
-              const result = yield* runtime.job.block({ id: child.id, sessionID: context.sessionID }).pipe(
-                Effect.onInterrupt(() =>
-                  Effect.all([runtime.session.interrupt(child.id), runtime.job.cancel(child.id)], {
-                    discard: true,
-                  }),
-                ),
+                prompt:
+                  existing === undefined
+                    ? ["You are a subagent spawned by another session.", input.prompt].join("\n")
+                    : input.prompt,
+                // Model selection is policy/config/session state, not an LLM-facing tool argument.
+                model: agent.model ?? parent.model,
+                existing,
+                background: input.background === true,
+                progress: (sessionID) => context.progress({ sessionID, status: "running" }),
+              }).pipe(
+                Effect.mapError((error) => new ToolFailure({ message: `Failed to run subagent: ${agent.id}`, error })),
               )
-              if (result?.type === "backgrounded") {
-                yield* notifyWhenDone(
-                  context.sessionID,
-                  child.id,
-                  agent.name,
-                  input.description,
-                  result.info.started_at,
-                )
-                return backgroundResult(child.id)
-              }
               // Failure surfaces keep the sessionID visible so the model can continue the child.
-              if (result?.info.status === "error")
+              if (result.status === "error")
                 return yield* new ToolFailure({
-                  message: `Subagent failed (sessionID: ${child.id}): ${result.info.error ?? "unknown error"}`,
+                  message: `Subagent failed (sessionID: ${result.sessionID}): ${result.output}`,
                 })
-              if (result?.info.status === "cancelled")
-                return yield* new ToolFailure({ message: `Subagent cancelled (sessionID: ${child.id})` })
-              return { sessionID: child.id, status: "completed" as const, output: result?.info.output ?? NO_TEXT }
+              if (result.status === "cancelled")
+                return yield* new ToolFailure({ message: `Subagent cancelled (sessionID: ${result.sessionID})` })
+              return result
             }).pipe(
               Effect.map((output) => ({
                 output,

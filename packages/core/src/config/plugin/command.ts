@@ -1,18 +1,20 @@
 export * as ConfigCommandPlugin from "./command.js"
 
 import { define } from "@opencode-ai/plugin/effect/plugin"
-import { Agent } from "@opencode-ai/schema/agent"
 import { Info, type Entry } from "@opencode-ai/schema/config"
 import { ConfigCommand } from "@opencode-ai/schema/config/command"
 import { Model } from "@opencode-ai/schema/model"
 import { Provider } from "@opencode-ai/schema/provider"
 import { AppProcess } from "@opencode-ai/util/process"
 import path from "path"
-import { Effect, Option, Schema, Stream } from "effect"
+import { Effect, Option, Schema, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
+import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
+import { PluginRuntime } from "../../plugin/runtime.js"
 import { ShellSelect } from "../../shell/select.js"
+import { Subagent } from "../../subagent.js"
 import { FSUtil } from "@opencode-ai/util/fs-util"
 import { ConfigMarkdown } from "../markdown.js"
 
@@ -21,8 +23,11 @@ const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
 export const Plugin = define({
   id: "opencode.config.command",
   effect: Effect.fn(function* (ctx) {
+    const agents = yield* Agent.Service
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const runtime = yield* PluginRuntime.Service
+    const scope = yield* Scope.Scope
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [{ commands: entry.info.commands }]
       if (entry.type !== "directory") return []
@@ -65,16 +70,15 @@ export const Plugin = define({
             description: command.description,
             execute: (input) =>
               Effect.gen(function* () {
-                const agent = command.agent === undefined ? undefined : Agent.ID.make(command.agent)
-                const commandAgent = yield* Effect.gen(function* () {
-                  if (agent === undefined) return
-                  const session = yield* ctx.session.get({ sessionID: input.sessionID })
-                  if (session.agent !== agent) yield* ctx.session.switchAgent({ sessionID: input.sessionID, agent })
-                  return (yield* ctx.agent.get({ agentID: agent })).data
-                })
+                const requested = command.agent === undefined ? undefined : Agent.ID.make(command.agent)
+                const resolved = requested === undefined ? undefined : yield* agents.get(requested)
+                // An explicitly configured agent that no longer exists must not silently fall back
+                // to the caller's agent, in a child or in the caller's own Session.
+                if (requested !== undefined && resolved === undefined)
+                  return yield* Effect.fail(new Error(`Command ${name} references unknown agent ${requested}`))
                 const model =
                   command.model === undefined
-                    ? commandAgent?.model
+                    ? resolved?.model
                     : {
                         id: Model.ID.make(command.model.model),
                         providerID: Provider.ID.make(command.model.providerID),
@@ -82,16 +86,47 @@ export const Plugin = define({
                           ? {}
                           : { variant: Model.VariantID.make(command.model.variant) }),
                       }
+                const text = yield* evaluateTemplate(command.template, input.prompt.text, {
+                  config,
+                  location,
+                  processes,
+                  shell,
+                })
+                // V1 parity: a subagent-mode agent runs the command in a child Session unless the
+                // command opts out, and `subtask: true` forces one even for a primary agent.
+                if ((resolved?.mode === "subagent" && command.subtask !== false) || command.subtask === true) {
+                  const parent = yield* ctx.session.get({ sessionID: input.sessionID })
+                  // No command agent falls back to the caller's agent, then the default agent.
+                  const child = resolved ?? (yield* agents.resolve(parent.agent))
+                  // The caller's Session keeps its own agent and model; only the child adopts them.
+                  yield* child === undefined
+                    ? Effect.fail(new Error(`Command ${name} could not resolve a subtask agent`))
+                    : Subagent.run({
+                        runtime,
+                        scope,
+                        parentID: input.sessionID,
+                        agent: child,
+                        title: command.description ?? name,
+                        prompt: text,
+                        ...(input.prompt.files === undefined ? {} : { files: input.prompt.files }),
+                        ...(input.prompt.agents === undefined ? {} : { agents: input.prompt.agents }),
+                        ...(input.prompt.skills === undefined ? {} : { skills: input.prompt.skills }),
+                        model: model ?? child.model ?? parent.model,
+                        background: true,
+                        metadata: { command: name },
+                      })
+                  return
+                }
+                if (requested !== undefined) {
+                  const session = yield* ctx.session.get({ sessionID: input.sessionID })
+                  if (session.agent !== requested)
+                    yield* ctx.session.switchAgent({ sessionID: input.sessionID, agent: requested })
+                }
                 if (model !== undefined) yield* ctx.session.switchModel({ sessionID: input.sessionID, model })
                 yield* ctx.session.prompt({
                   ...input.prompt,
                   sessionID: input.sessionID,
-                  text: yield* evaluateTemplate(command.template, input.prompt.text, {
-                    config,
-                    location,
-                    processes,
-                    shell,
-                  }),
+                  text,
                   delivery: input.delivery,
                 })
               }).pipe(Effect.asVoid),
