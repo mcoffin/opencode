@@ -35,6 +35,7 @@ import { Plugin } from "@opencode-ai/core/plugin"
 import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
 import { Shell } from "@opencode-ai/core/shell"
 import { ShellSelect } from "@opencode-ai/core/shell/select"
+import type { ShellSource } from "@opencode-ai/plugin/effect/shell"
 import { ID } from "@opencode-ai/schema/shell"
 import { ShellTool } from "@opencode-ai/core/tool/plugin/shell"
 import { ToolOutput } from "@opencode-ai/core/tool-output"
@@ -1624,6 +1625,87 @@ describe("ShellTool", () => {
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+  )
+
+  it.live("reports the tool call source to shell sandbox hooks", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const seen: ShellSource[] = []
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                seen.push(event.source)
+              }),
+            )
+
+            const settled = yield* executeTool(registry, call({ command: helloCommand }, "call-provenance"))
+            expect(settled.status).toBe("completed")
+            expect(seen).toEqual([
+              {
+                type: "tool",
+                sessionID,
+                agent: toolIdentity.agent,
+                messageID: toolIdentity.messageID,
+                toolCallID: Tool.CallID.make("call-provenance"),
+              },
+            ])
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+    { timeout: 15_000 },
+  )
+
+  it.live("reports the api source to shell sandbox hooks for direct creates", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const shell = yield* Shell.Service
+            const seen: ShellSource[] = []
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                seen.push(event.source)
+              }),
+            )
+
+            const info = yield* shell.create({ command: helloCommand, timeout: 0 })
+            const settled = yield* shell.wait(info.id).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            expect(settled._tag).toBe("Some")
+            expect(seen).toEqual([{ type: "api" }])
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("reports the user source to shell sandbox hooks for session shells", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            const sessions = yield* Session.Service
+            const seen: ShellSource[] = []
+            yield* hooks.register("shell", "sandbox", (event) =>
+              Effect.sync(() => {
+                seen.push(event.source)
+              }),
+            )
+
+            yield* sessions.shell({ sessionID, command: helloCommand })
+            expect(seen).toEqual([{ type: "user", sessionID }])
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+    { timeout: 15_000 },
   )
 
   if (!isWindows) {
