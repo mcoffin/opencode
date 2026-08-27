@@ -5,6 +5,8 @@ import { Agent } from "@opencode-ai/schema/agent"
 import { Model } from "@opencode-ai/schema/model"
 import { Provider } from "@opencode-ai/schema/provider"
 import { Session } from "@opencode-ai/schema/session"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { Tool } from "@opencode-ai/schema/tool"
 import { Effect, Layer } from "effect"
 import { PluginHooks } from "../src/plugin/hooks"
 import { testEffect } from "./lib/effect"
@@ -54,12 +56,13 @@ describe("PluginHooks", () => {
           event.command = "echo changed"
         }),
       )
-      const event = {
+      const event: ShellCreateBefore = {
         command: "echo original",
         cwd: "/tmp",
         timeout: 0,
         shell: "/bin/sh",
         env: {},
+        source: { type: "user", sessionID: Session.ID.make("ses_hooks") },
       }
 
       expect(yield* hooks.trigger("shell", "create.before", event)).toBe(event)
@@ -87,6 +90,13 @@ describe("PluginHooks", () => {
         cwd: "/tmp",
         timeout: 0,
         shell: "/bin/sh",
+        source: {
+          type: "tool",
+          sessionID: Session.ID.make("ses_hooks"),
+          agent: Agent.ID.make("build"),
+          messageID: SessionMessage.ID.make("msg_hooks"),
+          toolCallID: Tool.CallID.make("call_hooks"),
+        },
       }
 
       expect(yield* hooks.trigger("shell", "sandbox", event)).toBe(event)

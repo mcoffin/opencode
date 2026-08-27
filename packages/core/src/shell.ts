@@ -14,7 +14,7 @@ import { FileRetention } from "./file-retention.js"
 import { Location } from "./location.js"
 import { Global } from "@opencode-ai/util/global"
 import { ShellSelect } from "./shell/select.js"
-import type { ShellCreateBefore, ShellSandbox } from "@opencode-ai/plugin/effect/shell"
+import type { ShellCreateBefore, ShellSandbox, ShellSource } from "@opencode-ai/plugin/effect/shell"
 import { PluginHooks } from "./plugin/hooks.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { SessionSchema } from "./session/schema.js"
@@ -32,6 +32,7 @@ export const DIRECTORY = "shell"
 type Info = Shell.Info
 type CreateInput = Shell.CreateInput & {
   shell?: string
+  source?: ShellSource
 }
 
 type Active = {
@@ -226,6 +227,7 @@ const layer = () =>
           location.workspaceID === undefined && Schema.is(SessionSchema.ID)(sessionID)
             ? yield* environments.get(sessionID)
             : undefined
+        const source: ShellSource = input.source ?? { type: "api" }
         const invocation: ShellCreateBefore = {
           command: input.command,
           cwd: input.cwd ?? location.directory,
@@ -236,6 +238,7 @@ const layer = () =>
             TERM: "xterm-256color",
             OPENCODE_TERMINAL: "1",
           },
+          source,
         }
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)
@@ -246,6 +249,7 @@ const layer = () =>
           cwd: invocation.cwd,
           timeout: invocation.timeout,
           shell: invocation.shell,
+          source: invocation.source,
         }
         yield* hooks.trigger("shell", "sandbox", sandbox)
         invocation.env = sandbox.env

@@ -731,6 +731,7 @@ const layer = Layer.effect(
                   cwd: session.location.directory,
                   timeout: 0,
                   metadata: { sessionID: input.sessionID },
+                  source: { type: "user", sessionID: input.sessionID },
                 })
                 .pipe(Effect.orDie)
             }).pipe(Effect.provide(locations.get(session.location)))
