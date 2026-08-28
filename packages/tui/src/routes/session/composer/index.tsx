@@ -27,6 +27,8 @@ const ComposerContext = createContext<{
   close: () => void
 }>()
 
+export { ComposerContext }
+
 export function useComposerTab() {
   const ctx = useContext(ComposerContext)
   if (!ctx) throw new Error("useComposerTab must be used within a Composer")

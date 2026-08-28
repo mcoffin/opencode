@@ -10,7 +10,9 @@ import { Locale } from "../../../util/locale"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./index"
 import { withTimestampedFallback } from "@opencode-ai/util/session-title-fallback"
-import { sessionFamily } from "../../../util/session"
+import { sessionFamily, contextUsage, formatContextUsage } from "../../../util/session"
+
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
 interface SubagentEntry {
   sessionID: string
@@ -199,10 +201,17 @@ export function SubagentsTab(props: { sessionID: string }) {
           <For each={entries()}>
             {(entry, index) => {
               const active = createMemo(() => index() === store.selected)
-              const status = createMemo(() => {
-                if (entry.status === "running") return "Running"
-                return ""
-              })
+              const info = createMemo(() => data.session.get(entry.sessionID))
+              const usage = createMemo(() =>
+                info()
+                  ? contextUsage(
+                      data.session.message.list(entry.sessionID),
+                      data.location.model.list(info().location),
+                      info().revert?.messageID,
+                    )
+                  : undefined,
+              )
+              const cost = createMemo(() => data.session.cost(entry.sessionID))
               return (
                 <box
                   flexDirection="row"
@@ -237,11 +246,18 @@ export function SubagentsTab(props: { sessionID: string }) {
                       {entry.agent}: {entry.title}
                     </text>
                   </box>
-                  <Show when={status()}>
-                    <text fg={active() ? theme.text.action.primary.focused : theme.text.subdued} wrapMode="none">
-                      {status()}
-                    </text>
-                  </Show>
+                  <text
+                    fg={active() ? theme.text.action.primary.focused : theme.text.subdued}
+                    wrapMode="none"
+                  >
+                    {[
+                      usage() ? formatContextUsage(usage()!.tokens, usage()!.percent) : undefined,
+                      cost() > 0 ? money.format(cost()) : undefined,
+                      entry.status === "running" ? "Running" : undefined,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </text>
                 </box>
               )
             }}
