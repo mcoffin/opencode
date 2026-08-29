@@ -1,28 +1,42 @@
 export * as ConfigCommandPlugin from "./command.js"
 
 import { define } from "@opencode-ai/plugin/effect/plugin"
-import { Agent } from "@opencode-ai/schema/agent"
 import { Info, type Entry } from "@opencode-ai/schema/config"
 import { ConfigCommand } from "@opencode-ai/schema/config/command"
 import { Model } from "@opencode-ai/schema/model"
 import { Provider } from "@opencode-ai/schema/provider"
+import type { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { AppProcess } from "@opencode-ai/util/process"
 import path from "path"
-import { Effect, Option, Schema, Stream } from "effect"
+import { Effect, Option, Schema, Scope, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
+import { Agent } from "../../agent.js"
+import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
+import { Session } from "../../session.js"
+import { Job } from "../../job.js"
+import { SessionEvent } from "../../session/event.js"
+import type { SessionSchema } from "../../session/schema.js"
+import { SubagentCompletion } from "../../session/subagent-completion.js"
 import { ShellSelect } from "../../shell/select.js"
 import { FSUtil } from "@opencode-ai/util/fs-util"
 import { ConfigMarkdown } from "../markdown.js"
 
 const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
 
+const NO_TEXT = "Subagent completed without a text response."
+
 export const Plugin = define({
   id: "opencode.config.command",
   effect: Effect.fn(function* (ctx) {
+    const agents = yield* Agent.Service
+    const bus = yield* Bus.Service
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const sessions = yield* Session.Service
+    const jobs = yield* Job.Service
+    const scope = yield* Scope.Scope
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [{ commands: entry.info.commands }]
       if (entry.type !== "directory") return []
@@ -57,6 +71,87 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
     loaded.documents = yield* load()
+    // Concatenate the child's final completed assistant text. Distinguishes "completed with no
+    // text" (generic string) from "failed" (the run effect fails, surfaced as a job error).
+    const latestAssistantText = Effect.fn("ConfigCommandPlugin.latestAssistantText")(function* (
+      sessionID: SessionSchema.ID,
+    ) {
+      const messages = yield* sessions.messages({ sessionID, order: "desc", limit: 20 })
+      const assistant = messages.find(
+        (message) =>
+          message.type === "assistant" && message.time.completed !== undefined && message.error === undefined,
+      )
+      if (assistant === undefined || assistant.type !== "assistant") return NO_TEXT
+      const text = assistant.content
+        .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+        .map((part) => part.text)
+        .join("")
+      return text.length > 0 ? text : NO_TEXT
+    })
+    const runSubtask = Effect.fn("ConfigCommandPlugin.runSubtask")(function* (input: {
+      readonly parent: SessionSchema.Info
+      readonly childAgent: Agent.Info
+      readonly title: string
+      readonly command: string
+      readonly model?: Model.Ref
+      readonly text: string
+      readonly prompt: PromptInput.Prompt
+    }) {
+      // The caller's Session keeps its own agent and model; only the child adopts them.
+      const child = yield* sessions.create({
+        parentID: input.parent.id,
+        title: input.title,
+        agent: input.childAgent.id,
+        model: input.model ?? input.parent.model,
+      })
+      // Standard prompt admission outside the job: Job.start joining a running child skips
+      // its run effect, and the default wake starts an idle child or steers a running one.
+      yield* sessions.prompt({
+        sessionID: child.id,
+        text: input.text,
+        ...(input.prompt.files === undefined ? {} : { files: input.prompt.files }),
+        ...(input.prompt.agents === undefined ? {} : { agents: input.prompt.agents }),
+        ...(input.prompt.skills === undefined ? {} : { skills: input.prompt.skills }),
+        resume: false,
+      })
+      const recovery = {
+        kind: "subagent" as const,
+        parentSessionID: input.parent.id,
+        childSessionID: child.id,
+        agent: input.childAgent.name,
+        description: input.title,
+      }
+      const info = yield* jobs.start({
+        id: child.id,
+        type: "subagent",
+        title: input.title,
+        metadata: { command: input.command },
+        recovery,
+        run: sessions.resume(child.id).pipe(Effect.andThen(latestAssistantText(child.id))),
+      })
+      yield* jobs.background(info.id)
+      // One completion observer; command subtasks always create a fresh child, so no dedup key.
+      yield* Effect.gen(function* () {
+        const result = yield* jobs.wait({ id: child.id })
+        if (result.info) yield* SubagentCompletion.deliver(sessions, jobs, { ...result.info, recovery })
+      }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+      // Commit a launch notice to the caller's conversation so the subtask is visible before
+      // it settles. Published directly rather than through Session.synthetic: the caller must
+      // not be woken, only informed when the child completes (the observer adds that notice).
+      yield* bus.publish(SessionEvent.Synthetic, {
+        sessionID: input.parent.id,
+        text: `<subagent sessionID="${child.id}" state="running" description="${input.title}"></subagent>`,
+        description: input.title,
+        metadata: {
+          source: "subagent",
+          command: input.command,
+          childID: child.id,
+          agent: input.childAgent.name,
+          state: "running",
+        },
+      })
+      return child
+    })
     yield* ctx.command.transform((draft) => {
       for (const document of loaded.documents) {
         for (const [name, command] of Object.entries(document.commands ?? {})) {
@@ -65,13 +160,12 @@ export const Plugin = define({
             description: command.description,
             execute: (input) =>
               Effect.gen(function* () {
-                const agent = command.agent === undefined ? undefined : Agent.ID.make(command.agent)
-                const commandAgent = yield* Effect.gen(function* () {
-                  if (agent === undefined) return
-                  const session = yield* ctx.session.get({ sessionID: input.sessionID })
-                  if (session.agent !== agent) yield* ctx.session.switchAgent({ sessionID: input.sessionID, agent })
-                  return (yield* ctx.agent.get({ agentID: agent })).data
-                })
+                const requested = command.agent === undefined ? undefined : Agent.ID.make(command.agent)
+                const commandAgent = requested === undefined ? undefined : yield* agents.get(requested)
+                // An explicitly configured agent that no longer exists must not silently fall back
+                // to the caller's agent, in a child or in the caller's own Session.
+                if (requested !== undefined && commandAgent === undefined)
+                  return yield* Effect.fail(new Error(`Command ${name} references unknown agent ${requested}`))
                 const model =
                   command.model === undefined
                     ? commandAgent?.model
@@ -82,15 +176,40 @@ export const Plugin = define({
                           ? {}
                           : { variant: Model.VariantID.make(command.model.variant) }),
                       }
+                const text = yield* evaluateTemplate(command.template, input.prompt.text, {
+                  location,
+                  processes,
+                  shell,
+                })
+                // V1 parity: a subagent-mode agent runs the command in a child Session unless the
+                // command opts out, and `subtask: true` forces one even for a primary agent.
+                if ((commandAgent?.mode === "subagent" && command.subtask !== false) || command.subtask === true) {
+                  const parent = yield* sessions.get(input.sessionID)
+                  // No command agent falls back to the caller's current agent.
+                  const childAgent = commandAgent ?? (yield* agents.resolve(parent.agent))
+                  if (childAgent === undefined)
+                    return yield* Effect.fail(new Error(`Command ${name} could not resolve a subtask agent`))
+                  yield* runSubtask({
+                    parent,
+                    childAgent,
+                    title: command.description ?? name,
+                    command: name,
+                    model,
+                    text,
+                    prompt: input.prompt,
+                  })
+                  return
+                }
+                if (requested !== undefined) {
+                  const session = yield* ctx.session.get({ sessionID: input.sessionID })
+                  if (session.agent !== requested)
+                    yield* ctx.session.switchAgent({ sessionID: input.sessionID, agent: requested })
+                }
                 if (model !== undefined) yield* ctx.session.switchModel({ sessionID: input.sessionID, model })
                 yield* ctx.session.prompt({
                   ...input.prompt,
                   sessionID: input.sessionID,
-                  text: yield* evaluateTemplate(command.template, input.prompt.text, {
-                    location,
-                    processes,
-                    shell,
-                  }),
+                  text,
                   delivery: input.delivery,
                 })
               }).pipe(Effect.asVoid),

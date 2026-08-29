@@ -12,6 +12,7 @@ import { ConfigReferencePlugin } from "@opencode-ai/core/config/plugin/reference
 import { ConfigSkillPlugin } from "@opencode-ai/core/config/plugin/skill"
 import { Bus } from "@opencode-ai/core/bus"
 import { Integration } from "@opencode-ai/core/integration"
+import { Job } from "@opencode-ai/core/job"
 import { Plugin } from "@opencode-ai/core/plugin"
 import { PluginHost } from "@opencode-ai/core/plugin/host"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -28,7 +29,7 @@ import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
 
 const it = testEffect(
-  Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node]))),
+  Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, Job.node, ShellSelect.node]))),
 )
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "opencode.json")
