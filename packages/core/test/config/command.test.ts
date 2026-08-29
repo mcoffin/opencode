@@ -14,6 +14,8 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/util/effect/layer-node"
 import { FSUtil } from "@opencode-ai/util/fs-util"
 import { Bus } from "@opencode-ai/core/bus"
+import { Agent } from "@opencode-ai/core/agent"
+import { PluginRuntime } from "@opencode-ai/core/plugin/runtime"
 import { Credential } from "@opencode-ai/core/credential"
 import { WellKnown } from "@opencode-ai/core/wellknown"
 import { Global } from "@opencode-ai/util/global"
@@ -41,7 +43,16 @@ const shellLayer = Layer.succeed(
 
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Command.node, Bus.node, FSUtil.node, AppProcess.node, Location.node, ShellSelect.node]),
+    LayerNode.group([
+      Agent.node,
+      Command.node,
+      Bus.node,
+      FSUtil.node,
+      AppProcess.node,
+      Location.node,
+      PluginRuntime.node,
+      ShellSelect.node,
+    ]),
     [
       [Mcp.node, emptyMcpLayer],
       [Config.node, emptyConfigLayer],
