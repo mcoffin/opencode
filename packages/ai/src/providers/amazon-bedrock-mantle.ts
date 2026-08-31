@@ -14,6 +14,8 @@ export type Config = RouteDefaultsInput & {
   readonly baseURL?: string
   readonly credentials?: Credentials
   readonly region?: string
+  /** AWS profile used to export credentials via the `aws` CLI when `credentials` is absent or expired. */
+  readonly profile?: string
   readonly providerOptions?: OpenAIProviderOptionsInput
 }
 
@@ -23,6 +25,7 @@ export interface Settings extends ProviderPackage.Settings {
   readonly baseURL?: string
   readonly credentials?: Credentials
   readonly region?: string
+  readonly profile?: string
   readonly topP?: number
   readonly providerOptions?: OpenAIProviderOptionsInput
 }
@@ -53,13 +56,18 @@ const configuredRoute = <Body, Prepared>(route: Route<Body, Prepared>, input: Co
     endpoint: { baseURL: input.baseURL ?? `https://bedrock-mantle.${region}.api.aws/v1` },
     auth:
       input.apiKey === undefined
-        ? BedrockAuth.sigV4(credentials, { service: "bedrock-mantle", name: "Bedrock Mantle" })
+        ? BedrockAuth.sigV4(credentials, {
+            service: "bedrock-mantle",
+            name: "Bedrock Mantle",
+            profile: input.profile,
+            region,
+          })
         : Auth.bearer(input.apiKey),
   })
 }
 
 const defaults = (input: Config) => {
-  const { apiKey: _, baseURL: _baseURL, credentials: _credentials, region: _region, ...rest } = input
+  const { apiKey: _, baseURL: _baseURL, credentials: _credentials, region: _region, profile: _profile, ...rest } = input
   return rest
 }
 
@@ -101,6 +109,7 @@ const config = (settings: Settings): Config => {
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
     providerOptions: settings.providerOptions,
     region: settings.region,
+    profile: settings.profile,
   }
 }
 

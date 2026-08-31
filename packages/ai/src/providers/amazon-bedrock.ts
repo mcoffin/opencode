@@ -15,6 +15,8 @@ export type Config = RouteDefaultsInput & {
   readonly region?: string
   /** Override the computed `https://bedrock-runtime.<region>.amazonaws.com` URL. */
   readonly baseURL?: string
+  /** AWS profile used to export credentials via the `aws` CLI when `credentials` is absent or expired. */
+  readonly profile?: string
 }
 
 export interface Settings extends ProviderPackage.Settings {
@@ -23,6 +25,7 @@ export interface Settings extends ProviderPackage.Settings {
   readonly baseURL?: string
   readonly credentials?: BedrockCredentials
   readonly region?: string
+  readonly profile?: string
   readonly topP?: number
 }
 export const routes = [BedrockConverse.route]
@@ -30,14 +33,17 @@ export const routes = [BedrockConverse.route]
 const bedrockBaseURL = (region: string) => `https://bedrock-runtime.${region}.amazonaws.com`
 
 const configuredRoute = (input: Config) => {
-  const { apiKey, credentials, region, baseURL, ...rest } = input
+  const { apiKey, credentials, region, baseURL, profile, ...rest } = input
   const resolvedRegion = region ?? credentials?.region ?? "us-east-1"
   return BedrockConverse.route.with({
     ...rest,
     provider: id,
     providerMetadataKey: "bedrock",
     endpoint: { baseURL: baseURL ?? bedrockBaseURL(resolvedRegion) },
-    auth: apiKey === undefined ? BedrockConverse.sigV4Auth(credentials) : Auth.bearer(apiKey),
+    auth:
+      apiKey === undefined
+        ? BedrockConverse.sigV4Auth(credentials, { profile, region: resolvedRegion })
+        : Auth.bearer(apiKey),
   })
 }
 
@@ -64,5 +70,6 @@ export const model: ProviderPackage.Definition<Settings>["model"] = (modelID, se
     headers: settings.headers === undefined ? undefined : { ...settings.headers },
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
     region: settings.region,
+    profile: settings.profile,
   }).model(modelID)
 }

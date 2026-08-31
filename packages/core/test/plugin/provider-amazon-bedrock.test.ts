@@ -81,6 +81,47 @@ describe("AmazonBedrockPlugin", () => {
     }),
   )
 
+  it.effect("activates the provider when only a SigV4 identity is available", () =>
+    withEnv({ AWS_PROFILE: "cdl", AWS_ACCESS_KEY_ID: undefined, AWS_SECRET_ACCESS_KEY: undefined }, () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service
+        yield* catalog.transform((catalog) => {
+          catalog.provider.update(Provider.ID.amazonBedrock, (item) => {
+            item.package = "@opencode-ai/ai/providers/amazon-bedrock/mantle"
+            item.activation = "auto"
+          })
+        })
+        yield* addPlugin()
+        // AWS_PROFILE no longer registers as an env credential, so activation has
+        // to come from here or the provider disappears from the catalog.
+        expect(required(yield* catalog.provider.get(Provider.ID.amazonBedrock)).activation).toBe("enabled")
+      }),
+    ),
+  )
+
+  it.effect("leaves activation alone without any AWS identity", () =>
+    withEnv(
+      {
+        AWS_PROFILE: undefined,
+        AWS_ACCESS_KEY_ID: undefined,
+        AWS_SECRET_ACCESS_KEY: undefined,
+        AWS_BEARER_TOKEN_BEDROCK: undefined,
+      },
+      () =>
+        Effect.gen(function* () {
+          const catalog = yield* Catalog.Service
+          yield* catalog.transform((catalog) => {
+            catalog.provider.update(Provider.ID.amazonBedrock, (item) => {
+              item.package = "@opencode-ai/ai/providers/amazon-bedrock/mantle"
+              item.activation = "auto"
+            })
+          })
+          yield* addPlugin()
+          expect(required(yield* catalog.provider.get(Provider.ID.amazonBedrock)).activation).toBe("auto")
+        }),
+    ),
+  )
+
   it.effect("prefers endpoint over baseURL for SDK base URL", () =>
     withEnv({ AWS_BEARER_TOKEN_BEDROCK: undefined, AWS_PROFILE: undefined, AWS_ACCESS_KEY_ID: undefined }, () =>
       Effect.gen(function* () {

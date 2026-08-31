@@ -61,6 +61,11 @@ function environmentNames(provider: ModelsDev.Snapshot) {
   // Vertex. Those configure Google auth rather than carrying a key, so only the
   // Express Mode key may become a credential; GoogleVertexPlugin handles activation.
   if (provider.info.id === Provider.ID.googleVertex) return ["GOOGLE_VERTEX_API_KEY"]
+  // models.dev advertises the SigV4 access key, secret, and region for Bedrock.
+  // Those configure AWS signing rather than carrying a key — using one as an
+  // `apiKey` would send it as a bearer token and bypass SigV4 entirely, so only
+  // the Bedrock API key may become a credential; AmazonBedrockPlugin handles activation.
+  if (provider.info.id === Provider.ID.amazonBedrock) return ["AWS_BEARER_TOKEN_BEDROCK"]
   return [...provider.environment]
 }
 

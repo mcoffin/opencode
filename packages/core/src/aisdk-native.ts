@@ -197,6 +197,7 @@ function mapBedrockSettings(
     ...(apiKey === undefined ? {} : { apiKey }),
     ...(credentials === undefined ? {} : { credentials }),
     ...(typeof settings.region === "string" ? { region: settings.region } : {}),
+    ...(typeof settings.profile === "string" ? { profile: settings.profile } : {}),
     ...(typeof settings.topP === "number" ? { topP: settings.topP } : {}),
   }
 }

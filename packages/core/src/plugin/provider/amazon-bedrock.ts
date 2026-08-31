@@ -52,6 +52,19 @@ function resolveModelID(modelID: string, region: string | undefined) {
     : modelID
 }
 
+// AWS_ACCESS_KEY_ID/SECRET/REGION configure SigV4 rather than carrying a key, so
+// they no longer register as env credentials (see ModelsDevPlugin.environmentNames)
+// and cannot activate the provider on their own. Detect a usable identity here instead.
+function hasSigV4Identity(settings: Readonly<Record<string, unknown>> | undefined) {
+  if (typeof settings?.profile === "string" || isRecord(settings?.credentials)) return true
+  if (process.env.AWS_PROFILE) return true
+  return Boolean(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 function selectMantleModel(sdk: MantleSDK, modelID: string) {
   if (modelID === "openai.gpt-oss-safeguard-20b" || modelID === "openai.gpt-oss-safeguard-120b")
     return sdk.chat(modelID)
@@ -63,6 +76,12 @@ export const AmazonBedrockPlugin = define({
   effect: Effect.fn(function* (ctx) {
     yield* ctx.catalog.transform((evt) => {
       for (const item of evt.provider.list()) {
+        // Activation is package-independent: the native routes sign with SigV4 too.
+        if (item.provider.id === Provider.ID.amazonBedrock && hasSigV4Identity(item.provider.settings)) {
+          evt.provider.update(item.provider.id, (provider) => {
+            if (provider.activation === "auto") provider.activation = "enabled"
+          })
+        }
         if (!Provider.isAISDK(item.provider.package)) continue
         if (Provider.packageName(item.provider.package) !== "@ai-sdk/amazon-bedrock") continue
         evt.provider.update(item.provider.id, (provider) => {

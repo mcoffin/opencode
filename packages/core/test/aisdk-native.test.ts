@@ -311,7 +311,6 @@ describe("AISDKNative", () => {
             region: "eu-west-1",
           },
           baseURL: "https://bedrock-mantle.${AWS_REGION}.api.aws/v1",
-          profile: "ignored",
           credentialProvider: "ignored",
           fetch: "ignored",
           store: false,
@@ -330,6 +329,19 @@ describe("AISDKNative", () => {
         baseURL: "https://bedrock-mantle.eu-west-1.api.aws/v1",
         providerOptions: { store: false },
       },
+    })
+  })
+
+  test("forwards the Bedrock profile so the route can re-export credentials at request time", () => {
+    expect(map("@ai-sdk/amazon-bedrock", { region: "us-west-2", profile: "dev" })).toEqual({
+      package: "@opencode-ai/ai/providers/amazon-bedrock",
+      settings: { region: "us-west-2", profile: "dev" },
+    })
+    expect(
+      map("@ai-sdk/amazon-bedrock/mantle", { region: "us-west-2", profile: "dev" }, "openai.gpt-oss-120b"),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/amazon-bedrock/mantle/responses",
+      settings: { region: "us-west-2", profile: "dev" },
     })
   })
 

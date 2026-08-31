@@ -561,6 +561,46 @@ describe("ModelsDevPlugin", () => {
     }),
   )
 
+  it.effect("advertises only key-bearing Amazon Bedrock environment variables", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const catalog = yield* Catalog.Service
+
+      yield* ModelsDevPlugin.effect(
+        host({
+          catalog: catalogHost(catalog),
+          integration: integrationHost(integrations),
+        }),
+      ).pipe(
+        Effect.provideService(
+          ModelsDev.Service,
+          ModelsDev.Service.of({
+            get: () =>
+              Effect.succeed([
+                {
+                  info: {
+                    id: Provider.ID.make("amazon-bedrock"),
+                    name: "Amazon Bedrock",
+                    activation: "auto",
+                    package: Provider.aisdk("@ai-sdk/amazon-bedrock"),
+                  },
+                  environment: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"],
+                  models: [],
+                },
+              ] satisfies readonly ModelsDev.Snapshot[]),
+            refresh: () => Effect.void,
+          }),
+        ),
+      )
+
+      // The access key, secret, and region configure SigV4 signing. Registering any
+      // of them as a key credential would send its value as a bearer token.
+      expect(yield* integrations.get(Integration.ID.make("amazon-bedrock"))).toMatchObject({
+        methods: [{ type: "key" }, { type: "env", names: ["AWS_BEARER_TOKEN_BEDROCK"] }],
+      })
+    }),
+  )
+
   it.effect("converts reasoning options into settings variants", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
