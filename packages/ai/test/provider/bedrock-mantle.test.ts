@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { LLM, Message } from "../../src/index.js"
@@ -104,6 +104,69 @@ describe("Amazon Bedrock Mantle provider", () => {
       )
 
       expect(seen).toEqual([{ url: "https://mantle.test/v1/chat/completions", authorization: "Bearer test-key" }])
+    }),
+  )
+
+  it.effect("compiles Anthropic models against Mantle's Messages route", () =>
+    Effect.gen(function* () {
+      const model = AmazonBedrockMantle.configure({ credentials }).anthropic("anthropic.claude-sonnet-4")
+      const compiled = yield* compileRequest(LLM.request({ model, prompt: "Hi" }))
+
+      expect(compiled).toMatchObject({
+        route: "bedrock-mantle-anthropic",
+        protocol: "anthropic-messages",
+        body: { model: "anthropic.claude-sonnet-4", stream: true },
+      })
+      expect(compiled.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "Hi" }] }])
+      // The OpenAI Responses default must not leak onto an Anthropic body.
+      expect(compiled.body.store).toBeUndefined()
+      expect(model.route.providerMetadataKey).toBe("mantle")
+    }),
+  )
+
+  test("derives the Anthropic base URL from either OpenAI-shaped Mantle base", () => {
+    const anthropicBaseURL = (baseURL?: string) =>
+      AmazonBedrockMantle.configure({ apiKey: "test-key", ...(baseURL === undefined ? {} : { baseURL }) })
+        .anthropic("anthropic.claude-sonnet-4")
+        .route.endpoint.baseURL
+
+    expect(anthropicBaseURL()).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic/v1")
+    expect(anthropicBaseURL("https://mantle.test/v1")).toBe("https://mantle.test/anthropic/v1")
+    expect(anthropicBaseURL("https://bedrock-mantle.us-east-1.api.aws/openai/v1")).toBe(
+      "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1",
+    )
+  })
+
+  it.effect("signs Anthropic Messages requests with the Mantle service", () =>
+    Effect.gen(function* () {
+      const seen: Array<{
+        readonly url: string
+        readonly authorization: string | undefined
+        readonly version: string | undefined
+      }> = []
+      const model = AmazonBedrockMantle.configure({ credentials, region: "us-west-1" }).anthropic(
+        "anthropic.claude-sonnet-4",
+      )
+      yield* LLMClient.generate(LLM.request({ model, prompt: "Hi" })).pipe(
+        Effect.provide(
+          dynamicResponse((input) =>
+            Effect.gen(function* () {
+              const request = yield* HttpClientRequest.toWeb(input.request)
+              seen.push({
+                url: request.url,
+                authorization: request.headers.get("authorization") ?? undefined,
+                version: request.headers.get("anthropic-version") ?? undefined,
+              })
+              return input.respond("", { headers: { "content-type": "text/event-stream" } })
+            }),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(seen[0]?.url).toBe("https://bedrock-mantle.us-west-1.api.aws/anthropic/v1/messages")
+      expect(seen[0]?.authorization).toContain("/us-west-1/bedrock-mantle/aws4_request")
+      expect(seen[0]?.version).toBe("2023-06-01")
     }),
   )
 

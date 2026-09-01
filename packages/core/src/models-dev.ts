@@ -218,9 +218,17 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
   return []
 }
 
+// Mantle fronts Claude on the Anthropic Messages API, so models hosted there take the
+// same reasoning settings as the first-party Anthropic provider rather than the
+// OpenAI-shaped ones the rest of Mantle uses.
+function anthropicMessages(npm: string, modelID: string) {
+  if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic") return true
+  return npm === "@ai-sdk/amazon-bedrock/mantle" && modelID.startsWith("anthropic.")
+}
+
 function settingsForEffort(npm: string, modelID: string, effort: string): Provider.Settings | undefined {
   if (npm === "@openrouter/ai-sdk-provider") return { reasoning: { effort } }
-  if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic") {
+  if (anthropicMessages(npm, modelID)) {
     if (anthropicManualThinking(modelID)) return { effort }
     return {
       thinking: { type: "adaptive", display: "summarized" },
@@ -320,7 +328,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<Model.Info["v
       { id: Model.VariantID.make("none"), settings: { reasoning: { enabled: false } } },
       { id: Model.VariantID.make("thinking"), settings: { reasoning: { enabled: true } } },
     ]
-  if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic")
+  if (anthropicMessages(npm, modelID))
     return [
       { id: Model.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
       {
@@ -431,7 +439,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<Model.Info["v
 
 function settingsForBudget(npm: string, modelID: string, budget: number): Provider.Settings | undefined {
   if (npm === "@openrouter/ai-sdk-provider") return { reasoning: { max_tokens: budget } }
-  if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic")
+  if (anthropicMessages(npm, modelID))
     return { thinking: { type: "enabled", budgetTokens: budget } }
   if (npm === "@ai-sdk/google" || npm === "@ai-sdk/google-vertex")
     return { thinkingConfig: { includeThoughts: true, thinkingBudget: budget } }

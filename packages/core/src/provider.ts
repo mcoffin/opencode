@@ -37,6 +37,10 @@ const builtins = new Map<string, () => Promise<unknown>>([
   ["@opencode-ai/ai/providers/amazon-bedrock", () => import("@opencode-ai/ai/providers/amazon-bedrock")],
   ["@opencode-ai/ai/providers/amazon-bedrock/mantle", () => import("@opencode-ai/ai/providers/amazon-bedrock/mantle")],
   [
+    "@opencode-ai/ai/providers/amazon-bedrock/mantle/anthropic",
+    () => import("@opencode-ai/ai/providers/amazon-bedrock/mantle/anthropic"),
+  ],
+  [
     "@opencode-ai/ai/providers/amazon-bedrock/mantle/chat",
     () => import("@opencode-ai/ai/providers/amazon-bedrock/mantle/chat"),
   ],
@@ -45,6 +49,7 @@ const builtins = new Map<string, () => Promise<unknown>>([
     () => import("@opencode-ai/ai/providers/amazon-bedrock/mantle/responses"),
   ],
   ["@opencode-ai/ai/providers/anthropic", () => import("@opencode-ai/ai/providers/anthropic")],
+  ["@opencode-ai/ai/providers/anthropic-compatible", () => import("@opencode-ai/ai/providers/anthropic-compatible")],
   ["@opencode-ai/ai/providers/azure", () => import("@opencode-ai/ai/providers/azure")],
   ["@opencode-ai/ai/providers/azure/chat", () => import("@opencode-ai/ai/providers/azure/chat")],
   ["@opencode-ai/ai/providers/azure/responses", () => import("@opencode-ai/ai/providers/azure/responses")],

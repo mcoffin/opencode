@@ -41,6 +41,7 @@ describe("native OpenAI-compatible providers", () => {
       [AmazonBedrock.configure({ apiKey: "test" }).model("model"), "bedrock"],
       [AmazonBedrockMantle.configure({ apiKey: "test" }).chat("model"), "mantle"],
       [AmazonBedrockMantle.configure({ apiKey: "test" }).responses("model"), "mantle"],
+      [AmazonBedrockMantle.configure({ apiKey: "test" }).anthropic("model"), "mantle"],
       [Google.configure({ apiKey: "test" }).model("model"), "google"],
       [GoogleVertex.configure(vertex).model("model"), "vertex"],
       [GoogleVertexChat.configure(vertex).model("model"), "vertex"],

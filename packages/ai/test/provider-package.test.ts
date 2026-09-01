@@ -32,6 +32,7 @@ describe("provider package entrypoints", () => {
       import("@opencode-ai/ai/providers/cerebras"),
       import("@opencode-ai/ai/providers/deepinfra"),
       import("@opencode-ai/ai/providers/groq"),
+      import("@opencode-ai/ai/providers/amazon-bedrock/mantle/anthropic"),
     ])
 
     for (const module of modules) expect(module.model).toBeFunction()
@@ -40,6 +41,7 @@ describe("provider package entrypoints", () => {
     expect(modules[12].model).toBe(modules[13].model)
     expect(modules[19].model).toBe(modules[21].model)
     expect(modules[19].model).not.toBe(modules[20].model)
+    expect(modules[19].model).not.toBe(modules[25].model)
   })
 
   test("maps DeepInfra package settings onto its native executable model", async () => {

@@ -161,14 +161,24 @@ function mapProviderOptions(settings: Readonly<Record<string, unknown>>, exclude
   return { providerOptions: options }
 }
 
+// Mantle fronts three protocols: two OpenAI-compatible surfaces and an
+// Anthropic-compatible one. Only the Anthropic surface can carry native thinking and
+// cache breakpoints, so Claude models route there rather than through the OpenAI
+// translation the other model families need.
+function mantleSurface(modelID: string) {
+  if (modelID === "openai.gpt-oss-safeguard-20b" || modelID === "openai.gpt-oss-safeguard-120b") return "chat"
+  if (modelID.startsWith("anthropic.")) return "anthropic"
+  return "responses"
+}
+
 function mapBedrockMantle(input: MapInput, baseSettings: Readonly<Record<string, unknown>>): Mapping | undefined {
   const settings = input.settings
-  const chat = input.modelID === "openai.gpt-oss-safeguard-20b" || input.modelID === "openai.gpt-oss-safeguard-120b"
+  const surface = mantleSurface(input.modelID)
   return {
-    package: `@opencode-ai/ai/providers/amazon-bedrock/mantle/${chat ? "chat" : "responses"}`,
+    package: `@opencode-ai/ai/providers/amazon-bedrock/mantle/${surface}`,
     settings: {
       ...mapBedrockSettings(settings, baseSettings),
-      ...mapOpenAIOptions(settings),
+      ...(surface === "anthropic" ? mapAnthropicOptions(settings) : mapOpenAIOptions(settings)),
     },
     ...(isStringRecord(settings.headers) ? { headers: settings.headers } : {}),
   }
@@ -279,6 +289,17 @@ function bedrockRegion(settings: Readonly<Record<string, unknown>>) {
     : typeof credentials.region === "string"
       ? credentials.region
       : undefined
+}
+
+// The Anthropic Messages protocol reads `thinking` and `effort` straight off
+// providerOptions; the remaining Mantle settings are connection options, not model ones.
+function mapAnthropicOptions(settings: Readonly<Record<string, unknown>>) {
+  const options = {
+    ...(isRecord(settings.thinking) ? { thinking: settings.thinking } : {}),
+    ...(typeof settings.effort === "string" ? { effort: settings.effort } : {}),
+  }
+  if (Object.keys(options).length === 0) return {}
+  return { providerOptions: options }
 }
 
 function mapOpenAIOptions(settings: Readonly<Record<string, unknown>>) {

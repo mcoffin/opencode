@@ -287,6 +287,34 @@ describe("AISDKNative", () => {
         "@opencode-ai/ai/providers/amazon-bedrock/mantle/chat",
       )
     }
+
+    // Claude on Mantle speaks the Anthropic Messages API, so OpenAI Responses options
+    // must not ride along into its settings.
+    expect(map("@ai-sdk/amazon-bedrock/mantle", settings, "anthropic.claude-sonnet-5")).toEqual({
+      package: "@opencode-ai/ai/providers/amazon-bedrock/mantle/anthropic",
+      settings: {
+        apiKey: "token",
+        baseURL: "https://mantle.test/v1",
+        region: "us-west-2",
+      },
+      headers: { "x-test": "value" },
+    })
+
+    // The reasoning settings models.dev derives for a Mantle-hosted Claude reach the
+    // Anthropic Messages route as provider options.
+    expect(
+      map(
+        "@ai-sdk/amazon-bedrock/mantle",
+        { region: "us-west-2", thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+        "anthropic.claude-sonnet-5",
+      ),
+    ).toEqual({
+      package: "@opencode-ai/ai/providers/amazon-bedrock/mantle/anthropic",
+      settings: {
+        region: "us-west-2",
+        providerOptions: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+      },
+    })
     expect(
       map(
         "@ai-sdk/amazon-bedrock/mantle",
